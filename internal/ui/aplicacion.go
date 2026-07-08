@@ -1,0 +1,1951 @@
+package ui
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"image"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/dustin/go-humanize"
+
+	"gioui.org/app"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/paint"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+
+	"destrellas-dam/internal/almacen"
+	"destrellas-dam/internal/configuracion"
+	"destrellas-dam/internal/modelo"
+	"destrellas-dam/internal/servicios/archivos"
+	"destrellas-dam/internal/servicios/duplicados"
+	"destrellas-dam/internal/servicios/indexador"
+	"destrellas-dam/internal/servicios/metadatos"
+	"destrellas-dam/internal/yandex"
+)
+
+type tipoVista string
+
+const (
+	vistaPrincipal     tipoVista = "principal"
+	vistaElementoUnico tipoVista = "elemento_unico"
+	vistaDuplicados    tipoVista = "duplicados"
+	vistaUbicaciones   tipoVista = "ubicaciones"
+	vistaConfiguracion tipoVista = "configuracion"
+)
+
+type tipoPestanaLateral string
+
+const (
+	pestanaDirectorios tipoPestanaLateral = "directorios"
+	pestanaPalabras    tipoPestanaLateral = "palabras"
+	pestanaLugares     tipoPestanaLateral = "lugares"
+	pestanaYandex      tipoPestanaLateral = "yandex"
+)
+
+type tipoOrigenListado string
+
+const (
+	origenListadoCarpeta            tipoOrigenListado = "carpeta"
+	origenListadoEtiqueta           tipoOrigenListado = "etiqueta"
+	origenListadoUbicacion          tipoOrigenListado = "ubicacion"
+	origenListadoUbicacionSinNombre tipoOrigenListado = "ubicacion_sin_nombre"
+	etiquetaUbicacionSinNombre                        = "Ubicación sin nombre"
+)
+
+type opcionFiltroLateral struct {
+	Clave    string
+	Etiqueta string
+}
+
+// Dependencias agrupa servicios ya inicializados desde main.
+type Dependencias struct {
+	RepositorioConfig *configuracion.Repositorio
+	Configuracion     configuracion.Configuracion
+	Almacen           almacen.Repositorio
+	Listador          *indexador.ListadorLocal
+	Indexador         *indexador.Servicio
+	Metadatos         *metadatos.Servicio
+	Archivos          *archivos.Servicio
+	Duplicados        *duplicados.Servicio
+	Yandex            yandex.Cliente
+}
+
+type nodoArbolUI struct {
+	Ruta        string
+	Nombre      string
+	Expandido   bool
+	Cargado     bool
+	Cargando    bool
+	Hijos       []*nodoArbolUI
+	Seleccionar widget.Clickable
+	Alternar    widget.Clickable
+}
+
+type nodoVisible struct {
+	Nodo  *nodoArbolUI
+	Nivel int
+}
+
+type widgetsElemento struct {
+	Fila      widget.Clickable
+	Seleccion widget.Bool
+}
+
+type widgetsGrupoDuplicado struct {
+	BorrarMasAntiguo widget.Clickable
+	BorrarMasNuevo   widget.Clickable
+	BorrarMarcados   widget.Clickable
+	Seleccion        map[string]*widget.Bool
+	BorrarElemento   map[string]*widget.Clickable
+}
+
+type estadoPreview struct {
+	Imagen      image.Image
+	Cargando    bool
+	Maximo      int
+	Orientacion int
+	Rotacion    int
+}
+
+// Aplicacion mantiene el estado inmediato de la UI.
+type Aplicacion struct {
+	tema   *material.Theme
+	paleta Paleta
+
+	repoConfiguracion  *configuracion.Repositorio
+	configuracion      configuracion.Configuracion
+	almacen            almacen.Repositorio
+	listador           *indexador.ListadorLocal
+	indexador          *indexador.Servicio
+	servicioMetadatos  *metadatos.Servicio
+	servicioArchivos   *archivos.Servicio
+	servicioDuplicados *duplicados.Servicio
+	clienteYandex      yandex.Cliente
+	rutaUsuario        string
+	rutaLibraryUsuario string
+
+	ventana *app.Window
+	ops     op.Ops
+
+	vistaActual    tipoVista
+	pestanaLateral tipoPestanaLateral
+
+	filtros             modelo.FiltrosListado
+	carpetaSeleccionada string
+	origenListado       tipoOrigenListado
+	claveListadoActual  string
+	versionListado      int
+	offsetListado       int
+	sesionListado       *indexador.SesionListado
+	elementos           []modelo.Archivo
+	cargandoElementos   bool
+	hayMasElementos     bool
+	seleccionLote       map[string]bool
+
+	archivoActivo      modelo.Archivo
+	tieneArchivoActivo bool
+
+	raizArbol *nodoArbolUI
+
+	etiquetas                 []opcionFiltroLateral
+	ubicacionesNombradas      []opcionFiltroLateral
+	ubicacionesGuardadas      []modelo.UbicacionGuardada
+	ubicacionSeleccionada     string
+	usosUbicacionSeleccionada []modelo.UsoUbicacionGuardada
+	cargandoUsosUbicacion     bool
+
+	previews map[string]*estadoPreview
+
+	metadatosPendientes  map[string]bool
+	metadatosVerificados map[string]int64
+	reproductorVideo     estadoReproductorVideo
+	edicionRegiones      estadoEdicionRegiones
+
+	gruposDuplicados         []modelo.GrupoDuplicados
+	tipoCoincidenciaActual   modelo.TipoCoincidencia
+	categoriaDuplicados      modelo.CategoriaDuplicados
+	ordenDuplicados          modelo.OrdenDuplicados
+	progresoDuplicados       indexador.EventoProgreso
+	cargandoDuplicados       bool
+	cancelarDescubrimiento   context.CancelFunc
+	progresoMetadatos        indexador.EventoProgreso
+	escanandoMetadatos       bool
+	cancelarEscaneoMetadatos context.CancelFunc
+	versionEscaneoMetadatos  int
+
+	actualizaciones chan func()
+	mensajeEstado   string
+	ultimoError     string
+
+	// Navegacion superior.
+	botonVistaPrincipal     widget.Clickable
+	botonVistaElementoUnico widget.Clickable
+	botonVistaDuplicados    widget.Clickable
+	botonVistaUbicaciones   widget.Clickable
+	botonVistaConfiguracion widget.Clickable
+
+	// Pestañas laterales.
+	botonPestanaDirectorios widget.Clickable
+	botonPestanaPalabras    widget.Clickable
+	botonPestanaLugares     widget.Clickable
+	botonPestanaYandex      widget.Clickable
+
+	// Filtros.
+	mostrarOcultos        widget.Bool
+	ocultarCarpetas       widget.Bool
+	soloMultimedia        widget.Bool
+	soloVideos            widget.Bool
+	soloImagenes          widget.Bool
+	soloAudio             widget.Bool
+	recursivo             widget.Bool
+	botonGaleria          widget.Clickable
+	botonLista            widget.Clickable
+	botonOrdenAZ          widget.Clickable
+	botonOrdenZA          widget.Clickable
+	editorFiltroEtiquetas widget.Editor
+	editorFiltroLugares   widget.Editor
+
+	// Vistas principales.
+	listaLateral           widget.List
+	listaCentro            widget.List
+	listaDetalle           widget.List
+	listaDuplicados        widget.List
+	listaUbicaciones       widget.List
+	listaUsosUbicacion     widget.List
+	listaRelacionUbicacion widget.List
+	listaConfiguracion     widget.List
+	listaNombreVisor       widget.List
+
+	elementoWidgets map[string]*widgetsElemento
+	grupoWidgets    map[string]*widgetsGrupoDuplicado
+	widgetsLateral  map[string]*widget.Clickable
+
+	// Acciones generales y de lote.
+	editorDestinoMover    widget.Editor
+	editorDestinoLote     widget.Editor
+	botonMoverActivo      widget.Clickable
+	botonArchivarActivo   widget.Clickable
+	botonPapeleraActiva   widget.Clickable
+	botonGuardarMetadatos widget.Clickable
+	botonMoverLote        widget.Clickable
+	botonArchivarLote     widget.Clickable
+	botonPapeleraLote     widget.Clickable
+
+	// Editores de metadatos.
+	editorFecha             widget.Editor
+	editorHora              widget.Editor
+	editorZonaHoraria       widget.Editor
+	editorPalabras          widget.Editor
+	editorUbicacion         widget.Editor
+	editorFiltroUbicaciones widget.Editor
+	editorRelacionUbicacion widget.Editor
+	editorComentario        widget.Editor
+	editorCopyright         widget.Editor
+	editorGPSLatitud        widget.Editor
+	editorGPSLongitud       widget.Editor
+	editorMake              widget.Editor
+	editorModelo            widget.Editor
+	editorSoftware          widget.Editor
+	formularioMetadatos     estadoFormularioMetadatos
+
+	// Vista de elemento único.
+	botonVisorAnterior   widget.Clickable
+	botonVisorSiguiente  widget.Clickable
+	botonAgregarRegion   widget.Clickable
+	botonLimpiarRegiones widget.Clickable
+	botonGuardarRegiones widget.Clickable
+	botonRecortar        widget.Clickable
+	botonConvertir       widget.Clickable
+	botonExtraerFrame    widget.Clickable
+	botonOptimizarVideo  widget.Clickable
+	editorFormatoImagen  widget.Editor
+	editorSelectorFrame  widget.Editor
+	editorFormatoFrame   widget.Editor
+	sobreescribirVideo   widget.Bool
+
+	// Vista de duplicados.
+	editorRutaEscaneoDuplicados widget.Editor
+	botonDuplicadosLocales      widget.Clickable
+	botonDuplicadosRemotos      widget.Clickable
+	botonDuplicadosMixtos       widget.Clickable
+	botonEscanearLocal          widget.Clickable
+	botonEscanearRemoto         widget.Clickable
+	botonCoincidenciaExacta     widget.Clickable
+	botonCoincidenciaImagen     widget.Clickable
+	botonCoincidenciaVideo      widget.Clickable
+	botonOrdenGrupo             widget.Clickable
+	botonOrdenEspacio           widget.Clickable
+	botonOrdenAlfabetico        widget.Clickable
+	botonRecargarDuplicados     widget.Clickable
+
+	// Configuracion.
+	editorCarpetaInicial          widget.Editor
+	editorCarpetaArchivado        widget.Editor
+	editorClaveYandex             widget.Editor
+	editorRutaEscaneoMetadatos    widget.Editor
+	configMostrarOcultos          widget.Bool
+	configOcultarCarpetas         widget.Bool
+	configSoloMultimedia          widget.Bool
+	configSoloVideos              widget.Bool
+	configSoloImagenes            widget.Bool
+	configSoloAudio               widget.Bool
+	configRecursivo               widget.Bool
+	configOrdenDescendente        widget.Bool
+	botonEscanearMetadatos        widget.Clickable
+	botonPausarEscaneo            widget.Clickable
+	botonGuardarRelacionUbicacion widget.Clickable
+	botonQuitarRelacionUbicacion  widget.Clickable
+	botonGuardarConfig            widget.Clickable
+
+	botonAlternarVideo           widget.Clickable
+	botonReiniciarVideo          widget.Clickable
+	botonReproducirVideo         widget.Clickable
+	botonAbrirCarpetaContenedora widget.Clickable
+	controlProgresoVideo         widget.Float
+}
+
+// NuevaAplicacion construye la interfaz y sincroniza sus widgets con la configuracion.
+func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
+	paleta := nuevaPaleta()
+	tema := nuevaTema(paleta)
+	rutaUsuario := resolverRutaUsuarioLocal(dependencias.Configuracion.CarpetaInicial)
+
+	appUI := &Aplicacion{
+		tema:                   tema,
+		paleta:                 paleta,
+		repoConfiguracion:      dependencias.RepositorioConfig,
+		configuracion:          dependencias.Configuracion,
+		almacen:                dependencias.Almacen,
+		listador:               dependencias.Listador,
+		indexador:              dependencias.Indexador,
+		servicioMetadatos:      dependencias.Metadatos,
+		servicioArchivos:       dependencias.Archivos,
+		servicioDuplicados:     dependencias.Duplicados,
+		clienteYandex:          dependencias.Yandex,
+		rutaUsuario:            rutaUsuario,
+		rutaLibraryUsuario:     filepath.Join(rutaUsuario, "Library"),
+		vistaActual:            vistaPrincipal,
+		pestanaLateral:         pestanaDirectorios,
+		filtros:                dependencias.Configuracion.FiltrosPorDefecto,
+		carpetaSeleccionada:    dependencias.Configuracion.CarpetaInicial,
+		origenListado:          origenListadoCarpeta,
+		claveListadoActual:     dependencias.Configuracion.CarpetaInicial,
+		hayMasElementos:        true,
+		seleccionLote:          make(map[string]bool),
+		previews:               make(map[string]*estadoPreview),
+		metadatosPendientes:    make(map[string]bool),
+		metadatosVerificados:   make(map[string]int64),
+		tipoCoincidenciaActual: modelo.CoincidenciaExacta,
+		categoriaDuplicados:    modelo.CategoriaDuplicadosLocales,
+		ordenDuplicados:        modelo.OrdenPorTamanoGrupo,
+		actualizaciones:        make(chan func(), 512),
+		elementoWidgets:        make(map[string]*widgetsElemento),
+		grupoWidgets:           make(map[string]*widgetsGrupoDuplicado),
+		widgetsLateral:         make(map[string]*widget.Clickable),
+	}
+
+	appUI.listaLateral.Axis = layout.Vertical
+	appUI.listaCentro.Axis = layout.Vertical
+	appUI.listaDetalle.Axis = layout.Vertical
+	appUI.listaDuplicados.Axis = layout.Vertical
+	appUI.listaUbicaciones.Axis = layout.Vertical
+	appUI.listaUsosUbicacion.Axis = layout.Vertical
+	appUI.listaRelacionUbicacion.Axis = layout.Vertical
+	appUI.listaConfiguracion.Axis = layout.Vertical
+	appUI.listaNombreVisor.Axis = layout.Horizontal
+
+	appUI.mostrarOcultos.Value = appUI.filtros.MostrarOcultos
+	appUI.ocultarCarpetas.Value = appUI.filtros.OcultarCarpetas
+	appUI.soloMultimedia.Value = appUI.filtros.SoloMultimedia
+	appUI.soloVideos.Value = appUI.filtros.SoloVideos
+	appUI.soloImagenes.Value = appUI.filtros.SoloImagenes
+	appUI.soloAudio.Value = appUI.filtros.SoloAudio
+	appUI.recursivo.Value = appUI.filtros.Recursivo
+
+	appUI.editorDestinoMover.SingleLine = true
+	appUI.editorDestinoLote.SingleLine = true
+	appUI.editorFecha.SingleLine = true
+	appUI.editorHora.SingleLine = true
+	appUI.editorZonaHoraria.SingleLine = true
+	appUI.editorUbicacion.SingleLine = true
+	appUI.editorCopyright.SingleLine = true
+	appUI.editorGPSLatitud.SingleLine = true
+	appUI.editorGPSLongitud.SingleLine = true
+	appUI.editorMake.SingleLine = true
+	appUI.editorModelo.SingleLine = true
+	appUI.editorSoftware.SingleLine = true
+	appUI.editorFormatoImagen.SingleLine = true
+	appUI.editorFormatoImagen.SetText("webp")
+	appUI.editorSelectorFrame.SingleLine = true
+	appUI.editorSelectorFrame.SetText("50%")
+	appUI.editorFormatoFrame.SingleLine = true
+	appUI.editorFormatoFrame.SetText("png")
+	appUI.editorFiltroEtiquetas.SingleLine = true
+	appUI.editorFiltroLugares.SingleLine = true
+	appUI.editorFiltroUbicaciones.SingleLine = true
+	appUI.editorRelacionUbicacion.SingleLine = true
+	appUI.formularioMetadatos.listaAtributoExtendido.Axis = layout.Vertical
+	appUI.formularioMetadatos.listaUbicacionesSugeridas.Axis = layout.Vertical
+	appUI.formularioMetadatos.listaSalidaExiftool.Axis = layout.Vertical
+
+	appUI.editorCarpetaInicial.SingleLine = true
+	appUI.editorCarpetaInicial.SetText(appUI.configuracion.CarpetaInicial)
+	appUI.editorCarpetaArchivado.SingleLine = true
+	appUI.editorCarpetaArchivado.SetText(appUI.configuracion.CarpetaArchivado)
+	appUI.editorClaveYandex.SingleLine = true
+	appUI.editorClaveYandex.SetText(appUI.configuracion.ClaveAPIYandex)
+	appUI.editorRutaEscaneoMetadatos.SingleLine = true
+	appUI.editorRutaEscaneoMetadatos.SetText(appUI.rutaUsuario)
+	appUI.editorRutaEscaneoDuplicados.SingleLine = true
+	appUI.editorRutaEscaneoDuplicados.SetText(appUI.rutaUsuario)
+
+	appUI.configMostrarOcultos.Value = appUI.configuracion.FiltrosPorDefecto.MostrarOcultos
+	appUI.configOcultarCarpetas.Value = appUI.configuracion.FiltrosPorDefecto.OcultarCarpetas
+	appUI.configSoloMultimedia.Value = appUI.configuracion.FiltrosPorDefecto.SoloMultimedia
+	appUI.configSoloVideos.Value = appUI.configuracion.FiltrosPorDefecto.SoloVideos
+	appUI.configSoloImagenes.Value = appUI.configuracion.FiltrosPorDefecto.SoloImagenes
+	appUI.configSoloAudio.Value = appUI.configuracion.FiltrosPorDefecto.SoloAudio
+	appUI.configRecursivo.Value = appUI.configuracion.FiltrosPorDefecto.Recursivo
+	appUI.configOrdenDescendente.Value = appUI.configuracion.FiltrosPorDefecto.OrdenDescendente
+
+	appUI.reconstruirArbol()
+	appUI.reiniciarListado()
+	appUI.recargarColeccionesLaterales()
+	appUI.recargarDuplicados()
+
+	return appUI
+}
+
+// Ejecutar inicia el bucle principal de la ventana.
+func (a *Aplicacion) Ejecutar(ventana *app.Window) error {
+	a.ventana = ventana
+
+	for {
+		evento := ventana.Event()
+		switch evento := evento.(type) {
+		case app.DestroyEvent:
+			if a.sesionListado != nil {
+				_ = a.sesionListado.Cerrar()
+			}
+			if a.cancelarDescubrimiento != nil {
+				a.cancelarDescubrimiento()
+			}
+			if a.cancelarEscaneoMetadatos != nil {
+				a.cancelarEscaneoMetadatos()
+			}
+			return evento.Err
+		case app.FrameEvent:
+			a.drenarActualizaciones()
+			gtx := app.NewContext(&a.ops, evento)
+			a.dibujar(gtx)
+			evento.Frame(gtx.Ops)
+		}
+	}
+}
+
+func (a *Aplicacion) drenarActualizaciones() {
+	for {
+		select {
+		case actualizacion := <-a.actualizaciones:
+			if actualizacion != nil {
+				actualizacion()
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (a *Aplicacion) encolarActualizacion(actualizacion func()) {
+	select {
+	case a.actualizaciones <- actualizacion:
+	default:
+		go func() {
+			a.actualizaciones <- actualizacion
+		}()
+	}
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) establecerEstado(mensaje string, err error) {
+	a.mensajeEstado = mensaje
+	if err != nil {
+		a.ultimoError = err.Error()
+	} else {
+		a.ultimoError = ""
+	}
+}
+
+func resolverRutaUsuarioLocal(rutaRespaldo string) string {
+	rutaRespaldo = strings.TrimSpace(rutaRespaldo)
+	if rutaUsuario, err := os.UserHomeDir(); err == nil {
+		rutaUsuario = strings.TrimSpace(rutaUsuario)
+		if rutaUsuario != "" {
+			return filepath.Clean(rutaUsuario)
+		}
+	}
+	if rutaRespaldo == "" {
+		return string(filepath.Separator)
+	}
+	return filepath.Clean(rutaRespaldo)
+}
+
+func (a *Aplicacion) resolverRutaEscaneo(texto string) (string, error) {
+	ruta := strings.TrimSpace(texto)
+	if ruta == "" {
+		ruta = a.rutaUsuario
+	}
+
+	rutaAbsoluta, err := filepath.Abs(ruta)
+	if err != nil {
+		return "", fmt.Errorf("no se pudo resolver la ruta de escaneo: %w", err)
+	}
+	rutaAbsoluta = filepath.Clean(rutaAbsoluta)
+
+	info, err := os.Stat(rutaAbsoluta)
+	if err != nil {
+		return "", fmt.Errorf("no se pudo acceder a la ruta de escaneo: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("la ruta de escaneo debe ser una carpeta")
+	}
+	if !rutaEsIgualODescendiente(rutaAbsoluta, a.rutaUsuario) {
+		return "", fmt.Errorf("la ruta de escaneo debe estar dentro de %s", a.rutaUsuario)
+	}
+	if rutaEsIgualODescendiente(rutaAbsoluta, a.rutaLibraryUsuario) {
+		return "", fmt.Errorf("la ruta de escaneo no puede estar dentro de %s", a.rutaLibraryUsuario)
+	}
+	return rutaAbsoluta, nil
+}
+
+func (a *Aplicacion) rutasExcluidasEscaneo(raiz string) []string {
+	if rutaEsIgualODescendiente(a.rutaLibraryUsuario, raiz) {
+		return []string{a.rutaLibraryUsuario}
+	}
+	return nil
+}
+
+func rutaEsIgualODescendiente(ruta, base string) bool {
+	ruta = filepath.Clean(strings.TrimSpace(ruta))
+	base = filepath.Clean(strings.TrimSpace(base))
+	if ruta == "" || base == "" {
+		return false
+	}
+	if ruta == base {
+		return true
+	}
+	return strings.HasPrefix(ruta, base+string(filepath.Separator))
+}
+
+func (a *Aplicacion) reconstruirArbol() {
+	nombre := filepath.Base(a.configuracion.CarpetaInicial)
+	if nombre == "" || nombre == "." || nombre == string(filepath.Separator) {
+		nombre = a.configuracion.CarpetaInicial
+	}
+	a.raizArbol = &nodoArbolUI{
+		Ruta:      a.configuracion.CarpetaInicial,
+		Nombre:    nombre,
+		Expandido: true,
+		Cargado:   false,
+	}
+	a.asegurarHijosNodo(a.raizArbol)
+}
+
+func (a *Aplicacion) aplanarArbol() []nodoVisible {
+	if a.raizArbol == nil {
+		return nil
+	}
+
+	var visibles []nodoVisible
+	var recorrer func(nodo *nodoArbolUI, nivel int)
+	recorrer = func(nodo *nodoArbolUI, nivel int) {
+		visibles = append(visibles, nodoVisible{Nodo: nodo, Nivel: nivel})
+		if !nodo.Expandido {
+			return
+		}
+		for _, hijo := range nodo.Hijos {
+			recorrer(hijo, nivel+1)
+		}
+	}
+	recorrer(a.raizArbol, 0)
+	return visibles
+}
+
+func (a *Aplicacion) asegurarHijosNodo(nodo *nodoArbolUI) {
+	if nodo == nil || nodo.Cargado || nodo.Cargando {
+		return
+	}
+
+	nodo.Cargando = true
+	ruta := nodo.Ruta
+	go func() {
+		subdirectorios, err := a.listador.ListarSubdirectorios(context.Background(), ruta, a.filtros.MostrarOcultos)
+		a.encolarActualizacion(func() {
+			nodo.Cargando = false
+			if err != nil {
+				a.establecerEstado("No se pudieron cargar las subcarpetas", err)
+				return
+			}
+
+			a.fusionarHijosNodo(nodo, subdirectorios)
+			sort.SliceStable(nodo.Hijos, func(i, j int) bool {
+				return compararTextoUI(nodo.Hijos[i].Nombre, nodo.Hijos[j].Nombre)
+			})
+			nodo.Cargado = true
+		})
+	}()
+}
+
+func (a *Aplicacion) seleccionarCarpeta(ruta string) {
+	if ruta == "" {
+		return
+	}
+	if err := a.sincronizarArbolConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el árbol con la carpeta seleccionada", err)
+	}
+	a.carpetaSeleccionada = ruta
+	a.origenListado = origenListadoCarpeta
+	a.claveListadoActual = ruta
+	a.editorDestinoMover.SetText(filepath.Dir(ruta))
+	a.reiniciarListado()
+}
+
+func (a *Aplicacion) seleccionarEtiqueta(etiqueta string) {
+	etiqueta = strings.TrimSpace(etiqueta)
+	if etiqueta == "" {
+		return
+	}
+	a.origenListado = origenListadoEtiqueta
+	a.claveListadoActual = etiqueta
+	a.reiniciarListado()
+}
+
+func (a *Aplicacion) seleccionarUbicacion(ubicacion string) {
+	ubicacion = strings.TrimSpace(ubicacion)
+	if ubicacion == "" {
+		return
+	}
+	a.origenListado = origenListadoUbicacion
+	a.claveListadoActual = ubicacion
+	a.reiniciarListado()
+}
+
+func (a *Aplicacion) seleccionarUbicacionSinNombre() {
+	a.origenListado = origenListadoUbicacionSinNombre
+	a.claveListadoActual = ""
+	a.reiniciarListado()
+}
+
+func (a *Aplicacion) seleccionarNodoArbol(nodo *nodoArbolUI) {
+	if nodo == nil {
+		return
+	}
+	if !nodo.Cargado {
+		a.asegurarHijosNodo(nodo)
+	}
+	nodo.Expandido = true
+	a.seleccionarCarpeta(nodo.Ruta)
+}
+
+func (a *Aplicacion) cambiarVistaCentral(esGaleria bool) {
+	if a.filtros.VistaGaleria == esGaleria {
+		return
+	}
+	a.filtros.VistaGaleria = esGaleria
+	a.listaCentro.Position = layout.Position{}
+	if esGaleria {
+		a.establecerEstado("Vista de galería activada", nil)
+	} else {
+		a.establecerEstado("Vista de lista activada", nil)
+	}
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) cambiarOrdenListado(descendente bool) {
+	if a.filtros.OrdenDescendente == descendente {
+		return
+	}
+	a.filtros.OrdenDescendente = descendente
+	a.reiniciarListado()
+	if descendente {
+		a.establecerEstado("Orden descendente activado", nil)
+	} else {
+		a.establecerEstado("Orden ascendente activado", nil)
+	}
+}
+
+func (a *Aplicacion) reiniciarListado() {
+	if a.sesionListado != nil {
+		_ = a.sesionListado.Cerrar()
+		a.sesionListado = nil
+	}
+	a.versionListado++
+	a.offsetListado = 0
+	a.elementos = nil
+	a.seleccionLote = make(map[string]bool)
+	a.elementoWidgets = make(map[string]*widgetsElemento)
+	a.hayMasElementos = true
+	a.cargandoElementos = false
+	a.listaCentro.Position = layout.Position{}
+
+	switch a.origenListado {
+	case origenListadoEtiqueta:
+		a.establecerEstado(fmt.Sprintf("Cargando elementos con la etiqueta %q", a.claveListadoActual), nil)
+	case origenListadoUbicacion:
+		a.establecerEstado(fmt.Sprintf("Cargando elementos en %q", a.claveListadoActual), nil)
+	case origenListadoUbicacionSinNombre:
+		a.establecerEstado("Cargando elementos con GPS y sin valor Location", nil)
+	default:
+		sesion, err := a.listador.NuevaSesion(context.Background(), a.carpetaSeleccionada, a.filtros)
+		if err != nil {
+			a.elementos = nil
+			a.hayMasElementos = false
+			a.establecerEstado("No se pudo abrir la carpeta seleccionada", err)
+			return
+		}
+		a.sesionListado = sesion
+		a.establecerEstado("Cargando elementos de la carpeta seleccionada", nil)
+	}
+
+	a.cargarMasElementos()
+}
+
+func (a *Aplicacion) cargarMasElementos() {
+	if a.cargandoElementos || !a.hayMasElementos {
+		return
+	}
+	a.cargandoElementos = true
+
+	sesionActual := a.sesionListado
+	versionActual := a.versionListado
+	origenActual := a.origenListado
+	claveActual := a.claveListadoActual
+	offsetActual := a.offsetListado
+	limite := a.configuracion.TamanoPaginaLocal
+	if limite < 32 {
+		limite = 64
+	}
+
+	if origenActual == origenListadoCarpeta {
+		if sesionActual == nil {
+			a.cargandoElementos = false
+			a.hayMasElementos = false
+			return
+		}
+
+		go func() {
+			lote, fin, err := sesionActual.Siguiente(context.Background(), limite)
+			a.encolarActualizacion(func() {
+				if versionActual != a.versionListado || sesionActual != a.sesionListado {
+					return
+				}
+
+				a.cargandoElementos = false
+				if err != nil {
+					a.hayMasElementos = false
+					a.establecerEstado("No se pudo continuar el listado", err)
+					return
+				}
+
+				for _, elemento := range lote {
+					a.elementos = append(a.elementos, elemento)
+					if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
+						a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
+					}
+				}
+				a.hayMasElementos = !fin
+
+				if len(a.elementos) == 0 && fin {
+					a.establecerEstado("La carpeta seleccionada no contiene elementos compatibles con los filtros activos", nil)
+					return
+				}
+				a.establecerEstado(fmt.Sprintf("%d elementos visibles en memoria inmediata", len(a.elementos)), nil)
+			})
+		}()
+		return
+	}
+
+	go func() {
+		var (
+			lote []modelo.Archivo
+			err  error
+		)
+		switch origenActual {
+		case origenListadoEtiqueta:
+			lote, err = a.almacen.ListarArchivosPorEtiqueta(context.Background(), claveActual, a.filtros, limite, offsetActual)
+		case origenListadoUbicacion:
+			lote, err = a.almacen.ListarArchivosPorUbicacion(context.Background(), claveActual, a.filtros, limite, offsetActual)
+		case origenListadoUbicacionSinNombre:
+			lote, err = a.almacen.ListarArchivosSinUbicacionNombrada(context.Background(), a.filtros, limite, offsetActual)
+		default:
+			err = fmt.Errorf("origen de listado no soportado: %q", origenActual)
+		}
+		fin := len(lote) < limite
+		a.encolarActualizacion(func() {
+			if versionActual != a.versionListado || origenActual != a.origenListado || claveActual != a.claveListadoActual {
+				return
+			}
+
+			a.cargandoElementos = false
+			if err != nil {
+				a.hayMasElementos = false
+				a.establecerEstado("No se pudo continuar el listado", err)
+				return
+			}
+
+			for _, elemento := range lote {
+				a.elementos = append(a.elementos, elemento)
+				if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
+					a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
+				}
+			}
+			a.offsetListado = offsetActual + len(lote)
+			a.hayMasElementos = !fin
+
+			if len(a.elementos) == 0 && fin {
+				a.establecerEstado("No se encontraron elementos compatibles para la fuente seleccionada", nil)
+				return
+			}
+			a.establecerEstado(fmt.Sprintf("%d elementos visibles en memoria inmediata", len(a.elementos)), nil)
+		})
+	}()
+}
+
+func (a *Aplicacion) recargarColeccionesLaterales() {
+	go func() {
+		etiquetas, errEtiquetas := a.almacen.ListarEtiquetas(context.Background(), 200)
+		ubicaciones, errUbicaciones := a.almacen.ListarUbicaciones(context.Background(), 200)
+		ubicacionesGuardadas, errUbicacionesGuardadas := a.almacen.ListarUbicacionesGuardadas(context.Background(), 1_000)
+		tieneSinNombre, errSinNombre := a.almacen.TieneArchivosConUbicacionSinNombre(context.Background())
+		a.encolarActualizacion(func() {
+			if errEtiquetas == nil {
+				a.etiquetas = convertirOpcionesLaterales(etiquetas)
+			}
+			if errUbicaciones == nil {
+				a.ubicacionesNombradas = convertirOpcionesLaterales(ubicaciones)
+			}
+			if errUbicacionesGuardadas == nil {
+				a.actualizarUbicacionesGuardadasEnMemoria(ubicacionesGuardadas)
+			}
+			if errSinNombre == nil && tieneSinNombre {
+				a.ubicacionesNombradas = append(a.ubicacionesNombradas, opcionFiltroLateral{
+					Clave:    etiquetaUbicacionSinNombre,
+					Etiqueta: etiquetaUbicacionSinNombre,
+				})
+			}
+			if errEtiquetas != nil {
+				a.establecerEstado("No se pudieron cargar las etiquetas", errEtiquetas)
+			}
+			if errUbicaciones != nil {
+				a.establecerEstado("No se pudieron cargar las ubicaciones", errUbicaciones)
+			}
+			if errUbicacionesGuardadas != nil {
+				a.establecerEstado("No se pudieron cargar las ubicaciones guardadas", errUbicacionesGuardadas)
+			}
+			if errSinNombre != nil {
+				a.establecerEstado("No se pudo verificar si existen ubicaciones sin nombre", errSinNombre)
+			}
+		})
+	}()
+}
+
+func (a *Aplicacion) recargarDuplicados() {
+	if a.cargandoDuplicados {
+		return
+	}
+	a.cargandoDuplicados = true
+
+	tipo := a.tipoCoincidenciaActual
+	categoria := a.categoriaDuplicados
+	orden := a.ordenDuplicados
+	go func() {
+		grupos, err := a.servicioDuplicados.ListarGrupos(context.Background(), tipo, categoria, orden, 500, 0)
+		a.encolarActualizacion(func() {
+			a.cargandoDuplicados = false
+			if err != nil {
+				a.establecerEstado("No se pudieron cargar los grupos de duplicados", err)
+				return
+			}
+			a.gruposDuplicados = grupos
+			a.grupoWidgets = make(map[string]*widgetsGrupoDuplicado)
+		})
+	}()
+}
+
+func (a *Aplicacion) iniciarEscaneoMetadatos() {
+	if a.cancelarEscaneoMetadatos != nil {
+		a.cancelarEscaneoMetadatos()
+	}
+	rutaEscaneo, err := a.resolverRutaEscaneo(a.editorRutaEscaneoMetadatos.Text())
+	if err != nil {
+		a.establecerEstado("No se pudo iniciar el escaneo de metadatos", err)
+		return
+	}
+	a.editorRutaEscaneoMetadatos.SetText(rutaEscaneo)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	a.cancelarEscaneoMetadatos = cancelar
+	a.versionEscaneoMetadatos++
+	versionActual := a.versionEscaneoMetadatos
+	a.progresoMetadatos = indexador.EventoProgreso{}
+	a.escanandoMetadatos = true
+	a.establecerEstado("Iniciando escaneo de metadatos locales", nil)
+
+	flujo := a.indexador.Descubrir(ctx, rutaEscaneo, indexador.OpcionesDescubrimiento{
+		CalcularMetadatos:    true,
+		ConcurrenciaAnalisis: a.configuracion.ConcurrenciaMetadatos,
+		SoloMultimedia:       true,
+		RutasExcluidas:       a.rutasExcluidasEscaneo(rutaEscaneo),
+	})
+
+	go func() {
+		for evento := range flujo {
+			eventoActual := evento
+			a.encolarActualizacion(func() {
+				if versionActual != a.versionEscaneoMetadatos {
+					return
+				}
+
+				a.progresoMetadatos = eventoActual
+				if eventoActual.Error != nil {
+					a.establecerEstado("Escaneo de metadatos con incidencias", eventoActual.Error)
+				}
+				if eventoActual.Finalizado {
+					a.escanandoMetadatos = false
+					a.cancelarEscaneoMetadatos = nil
+					if eventoActual.Error != nil && errors.Is(eventoActual.Error, context.Canceled) {
+						a.establecerEstado("Escaneo de metadatos cancelado", nil)
+						return
+					}
+					a.establecerEstado(fmt.Sprintf("Escaneo de metadatos finalizado. %d archivos analizados", eventoActual.ArchivosAnalizados), nil)
+					a.recargarColeccionesLaterales()
+					a.reiniciarListado()
+					a.refrescarArchivoActivoDesdeCatalogo()
+				}
+			})
+		}
+	}()
+}
+
+func (a *Aplicacion) pausarEscaneoMetadatos() {
+	if a.cancelarEscaneoMetadatos == nil {
+		return
+	}
+	a.cancelarEscaneoMetadatos()
+	a.establecerEstado("Solicitando pausa del escaneo de metadatos", nil)
+}
+
+func (a *Aplicacion) iniciarDescubrimientoLocal() {
+	if a.cancelarDescubrimiento != nil {
+		a.cancelarDescubrimiento()
+	}
+	rutaEscaneo, err := a.resolverRutaEscaneo(a.editorRutaEscaneoDuplicados.Text())
+	if err != nil {
+		a.establecerEstado("No se pudo iniciar el descubrimiento local", err)
+		return
+	}
+	a.editorRutaEscaneoDuplicados.SetText(rutaEscaneo)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	a.cancelarDescubrimiento = cancelar
+	a.progresoDuplicados = indexador.EventoProgreso{}
+	a.establecerEstado("Iniciando descubrimiento local para hashes y duplicados", nil)
+
+	flujo := a.servicioDuplicados.IniciarDescubrimientoLocal(ctx, rutaEscaneo, a.rutasExcluidasEscaneo(rutaEscaneo))
+	go func() {
+		for evento := range flujo {
+			eventoActual := evento
+			a.encolarActualizacion(func() {
+				if eventoActual.Error != nil {
+					a.establecerEstado("Descubrimiento local con incidencias", eventoActual.Error)
+				}
+				a.progresoDuplicados = eventoActual
+				if eventoActual.Finalizado {
+					a.establecerEstado(fmt.Sprintf("Descubrimiento finalizado. %d archivos analizados", eventoActual.ArchivosAnalizados), nil)
+					a.recargarColeccionesLaterales()
+					a.recargarDuplicados()
+				}
+			})
+		}
+	}()
+}
+
+func (a *Aplicacion) refrescarArchivoActivoDesdeCatalogo() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+		return
+	}
+
+	archivo, err := a.almacen.ObtenerArchivoPorRuta(context.Background(), a.archivoActivo.Ruta)
+	if err != nil {
+		return
+	}
+
+	a.archivoActivo = archivo
+	a.sincronizarEditoresMetadatos(archivo)
+	a.reemplazarArchivoEnMemoria(archivo)
+	a.sincronizarEdicionRegiones(archivo)
+	a.solicitarSalidaExiftool(archivo, true)
+}
+
+func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
+	a.archivoActivo = archivo
+	a.tieneArchivoActivo = true
+	a.sincronizarEdicionRegiones(archivo)
+	a.sincronizarEditoresMetadatos(archivo)
+	a.solicitarSalidaExiftool(archivo, false)
+	a.editorDestinoMover.SetText(filepath.Dir(archivo.Ruta))
+	a.sincronizarReproductorVideo(archivo)
+	a.solicitarEnriquecimientoExplorador(archivo)
+
+	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+		a.solicitarPreview(archivo, 2_048)
+	}
+}
+
+func (a *Aplicacion) archivoNecesitaEnriquecimiento(archivo modelo.Archivo) bool {
+	if !archivo.EsMultimedia() || archivo.EsDirectorio {
+		return false
+	}
+	return archivo.Metadatos.MetadatosVacios() ||
+		archivo.Ancho == 0 ||
+		archivo.Alto == 0 ||
+		(archivo.Tipo == modelo.TipoVideo && archivo.Duracion == 0)
+}
+
+func (a *Aplicacion) revisionArchivoSistema(archivo modelo.Archivo) int64 {
+	if archivo.Modificado.IsZero() {
+		return -1
+	}
+	return archivo.Modificado.UTC().UnixNano()
+}
+
+func (a *Aplicacion) archivoDebeVerificarseConSistema(archivo modelo.Archivo) bool {
+	if !archivo.EsMultimedia() || archivo.EsDirectorio || strings.TrimSpace(archivo.Ruta) == "" {
+		return false
+	}
+	if a.metadatosPendientes[archivo.Ruta] {
+		return false
+	}
+
+	revisionActual := a.revisionArchivoSistema(archivo)
+	revisionVerificada, existe := a.metadatosVerificados[archivo.Ruta]
+	return !existe || revisionVerificada != revisionActual
+}
+
+func (a *Aplicacion) marcarArchivoVerificadoConSistema(archivo modelo.Archivo) {
+	if a.metadatosVerificados == nil {
+		a.metadatosVerificados = make(map[string]int64)
+	}
+	a.metadatosVerificados[archivo.Ruta] = a.revisionArchivoSistema(archivo)
+}
+
+func (a *Aplicacion) esElementoActivo(archivo modelo.Archivo) bool {
+	return a.tieneArchivoActivo && a.archivoActivo.Ruta == archivo.Ruta
+}
+
+func (a *Aplicacion) manejarActivacionElemento(archivo modelo.Archivo, abrirVista bool) {
+	a.activarArchivo(archivo)
+	if archivo.EsDirectorio {
+		a.seleccionarCarpeta(archivo.Ruta)
+		return
+	}
+	if abrirVista {
+		a.vistaActual = vistaElementoUnico
+	}
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) indiceArchivoActivoEnListado() int {
+	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+		return -1
+	}
+	for indice := range a.elementos {
+		if a.elementos[indice].Ruta == a.archivoActivo.Ruta {
+			return indice
+		}
+	}
+	return -1
+}
+
+func (a *Aplicacion) puedeNavegarVisor(desplazamiento int) bool {
+	indice := a.indiceArchivoActivoEnListado()
+	if indice < 0 || desplazamiento == 0 {
+		return false
+	}
+	destino := indice + desplazamiento
+	return destino >= 0 && destino < len(a.elementos)
+}
+
+func (a *Aplicacion) navegarVisor(desplazamiento int) {
+	if !a.puedeNavegarVisor(desplazamiento) {
+		return
+	}
+
+	destino := a.indiceArchivoActivoEnListado() + desplazamiento
+	a.activarArchivo(a.elementos[destino])
+	a.vistaActual = vistaElementoUnico
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) enriquecerArchivoActiva(archivo modelo.Archivo) {
+	go func() {
+		enriquecido, err := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudieron cargar todos los metadatos del archivo activo", err)
+				return
+			}
+			if err := a.almacen.GuardarArchivo(context.Background(), enriquecido); err != nil {
+				a.establecerEstado("No se pudo persistir el enriquecimiento del archivo activo", err)
+				return
+			}
+			a.reemplazarArchivoEnMemoria(enriquecido)
+			if a.tieneArchivoActivo && a.archivoActivo.Ruta == enriquecido.Ruta {
+				a.archivoActivo = enriquecido
+				a.sincronizarEdicionRegiones(enriquecido)
+				a.sincronizarEditoresMetadatos(enriquecido)
+			}
+			a.recargarColeccionesLaterales()
+		})
+	}()
+}
+
+func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) {
+	if archivo.Ruta == "" || !a.archivoDebeVerificarseConSistema(archivo) {
+		return
+	}
+	if a.metadatosPendientes[archivo.Ruta] {
+		return
+	}
+	a.metadatosPendientes[archivo.Ruta] = true
+
+	go func() {
+		enriquecido, err := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		a.encolarActualizacion(func() {
+			delete(a.metadatosPendientes, archivo.Ruta)
+			if err != nil {
+				a.establecerEstado("No se pudieron precargar todos los metadatos del explorador", err)
+				return
+			}
+			if err := a.almacen.GuardarArchivo(context.Background(), enriquecido); err != nil {
+				a.establecerEstado("No se pudo persistir el enriquecimiento precargado del explorador", err)
+				return
+			}
+			a.marcarArchivoVerificadoConSistema(enriquecido)
+			a.reemplazarArchivoEnMemoria(enriquecido)
+			if a.tieneArchivoActivo && a.archivoActivo.Ruta == enriquecido.Ruta {
+				a.archivoActivo = enriquecido
+				a.sincronizarEdicionRegiones(enriquecido)
+				a.sincronizarEditoresMetadatos(enriquecido)
+			}
+			if len(enriquecido.Metadatos.PalabrasClave) > 0 || len(enriquecido.Metadatos.Sujetos) > 0 || enriquecido.Metadatos.Ubicacion != "" || enriquecido.Metadatos.Coordenadas != nil {
+				a.recargarColeccionesLaterales()
+			}
+		})
+	}()
+}
+
+func (a *Aplicacion) reemplazarArchivoEnMemoria(archivo modelo.Archivo) {
+	for indice := range a.elementos {
+		if a.elementos[indice].Ruta == archivo.Ruta {
+			a.elementos[indice] = archivo
+			return
+		}
+	}
+}
+
+func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) {
+	if archivo.Ruta == "" {
+		return
+	}
+	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+		a.solicitarEnriquecimientoExplorador(archivo)
+	}
+
+	orientacionObjetivo := orientacionPreviewArchivo(archivo)
+	rotacionObjetivo := rotacionPreviewArchivo(archivo)
+	preview, existe := a.previews[archivo.Ruta]
+	if existe && preview != nil {
+		if preview.Cargando {
+			return
+		}
+		if preview.Imagen != nil &&
+			preview.Maximo >= tamanoMaximo &&
+			preview.Orientacion == orientacionObjetivo &&
+			preview.Rotacion == rotacionObjetivo {
+			return
+		}
+	}
+
+	var imagenActual image.Image
+	maximoActual := 0
+	if preview != nil && preview.Orientacion == orientacionObjetivo && preview.Rotacion == rotacionObjetivo {
+		imagenActual = preview.Imagen
+		maximoActual = preview.Maximo
+	}
+	if maximoActual > tamanoMaximo {
+		return
+	}
+	a.previews[archivo.Ruta] = &estadoPreview{
+		Imagen:      imagenActual,
+		Cargando:    true,
+		Maximo:      maximo(maximoActual, tamanoMaximo),
+		Orientacion: orientacionObjetivo,
+		Rotacion:    rotacionObjetivo,
+	}
+
+	go func() {
+		imagen, err := a.decodificarPreview(archivo, tamanoMaximo)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				if imagenActual != nil {
+					a.previews[archivo.Ruta] = &estadoPreview{
+						Imagen:      imagenActual,
+						Cargando:    false,
+						Maximo:      maximoActual,
+						Orientacion: orientacionObjetivo,
+						Rotacion:    rotacionObjetivo,
+					}
+					return
+				}
+				delete(a.previews, archivo.Ruta)
+				return
+			}
+			a.previews[archivo.Ruta] = &estadoPreview{
+				Imagen:      imagen,
+				Cargando:    false,
+				Maximo:      tamanoMaximo,
+				Orientacion: orientacionObjetivo,
+				Rotacion:    rotacionObjetivo,
+			}
+		})
+	}()
+}
+
+func orientacionPreviewArchivo(archivo modelo.Archivo) int {
+	if archivo.Tipo != modelo.TipoImagen {
+		return 1
+	}
+	return modelo.NormalizarOrientacionVisual(archivo.Metadatos.Orientacion)
+}
+
+func rotacionPreviewArchivo(archivo modelo.Archivo) int {
+	if archivo.Tipo != modelo.TipoVideo {
+		return 0
+	}
+	return modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
+}
+
+func (a *Aplicacion) moverArchivoActivo() {
+	if !a.tieneArchivoActivo {
+		return
+	}
+	destinoDir := strings.TrimSpace(a.editorDestinoMover.Text())
+	if destinoDir == "" {
+		a.establecerEstado("Indica una carpeta destino para mover el archivo activo", nil)
+		return
+	}
+
+	archivo := a.archivoActivo
+	destino := filepath.Join(destinoDir, filepath.Base(archivo.Ruta))
+	go func() {
+		if err := a.servicioArchivos.Mover(context.Background(), archivo.Ruta, destino); err != nil {
+			a.encolarActualizacion(func() {
+				a.establecerEstado("No se pudo mover el archivo activo", err)
+			})
+			return
+		}
+
+		archivoAnterior := archivo.Ruta
+		archivo.Ruta = destino
+		archivo.RutaPadre = filepath.Dir(destino)
+		archivo.Nombre = filepath.Base(destino)
+
+		errEliminar := a.almacen.EliminarArchivo(context.Background(), archivoAnterior)
+		errGuardar := a.almacen.GuardarArchivo(context.Background(), archivo)
+		a.encolarActualizacion(func() {
+			if errEliminar != nil {
+				a.establecerEstado("El archivo se movió, pero no se pudo limpiar la ruta anterior del catálogo", errEliminar)
+			} else if errGuardar != nil {
+				a.establecerEstado("El archivo se movió, pero no se pudo persistir su nueva ruta", errGuardar)
+			} else {
+				a.establecerEstado("Archivo movido correctamente", nil)
+			}
+			a.tieneArchivoActivo = false
+			a.descartarEdicionRegiones()
+			a.limpiarReproductorVideo()
+			a.reiniciarListado()
+			a.recargarDuplicados()
+		})
+	}()
+}
+
+func (a *Aplicacion) archivarArchivoActivo() {
+	if !a.tieneArchivoActivo {
+		return
+	}
+
+	archivo := a.archivoActivo
+	if !archivoTieneFechaYHoraArchivables(archivo) {
+		a.establecerEstado("El archivo necesita fecha y hora guardadas para archivarse", nil)
+		return
+	}
+
+	go func() {
+		destino, err := archivarArchivoConFecha(context.Background(), a.servicioArchivos, archivo)
+		if err != nil {
+			a.encolarActualizacion(func() {
+				a.establecerEstado("No se pudo archivar el archivo activo", err)
+			})
+			return
+		}
+
+		errEliminar := a.almacen.EliminarArchivo(context.Background(), archivo.Ruta)
+		archivo.Ruta = destino
+		archivo.RutaPadre = filepath.Dir(destino)
+		archivo.Nombre = filepath.Base(destino)
+		errGuardar := a.almacen.GuardarArchivo(context.Background(), archivo)
+		a.encolarActualizacion(func() {
+			if errEliminar != nil {
+				a.establecerEstado("El archivo se archivó, pero quedó un registro antiguo en el catálogo", errEliminar)
+			} else if errGuardar != nil {
+				a.establecerEstado("El archivo se archivó, pero no se pudo persistir su nueva ruta", errGuardar)
+			} else {
+				a.establecerEstado("Archivo archivado correctamente", nil)
+			}
+			a.tieneArchivoActivo = false
+			a.descartarEdicionRegiones()
+			a.limpiarReproductorVideo()
+			a.reiniciarListado()
+			a.recargarDuplicados()
+		})
+	}()
+}
+
+func (a *Aplicacion) enviarArchivoActivoAPapelera() {
+	if !a.tieneArchivoActivo {
+		return
+	}
+
+	ruta := a.archivoActivo.Ruta
+	go func() {
+		errAccion := a.servicioArchivos.EnviarAPapelera(context.Background(), ruta)
+		errCatalogo := a.almacen.EliminarArchivo(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			if errAccion != nil {
+				a.establecerEstado("No se pudo enviar el archivo activo a la papelera", errAccion)
+				return
+			}
+			if errCatalogo != nil {
+				a.establecerEstado("El archivo fue enviado a la papelera, pero no se limpió el catálogo", errCatalogo)
+			} else {
+				a.establecerEstado("Archivo enviado a la papelera", nil)
+			}
+			a.tieneArchivoActivo = false
+			a.descartarEdicionRegiones()
+			a.limpiarReproductorVideo()
+			a.reiniciarListado()
+			a.recargarDuplicados()
+		})
+	}()
+}
+
+func (a *Aplicacion) rutasSeleccionadas() []string {
+	rutas := make([]string, 0, len(a.seleccionLote))
+	for ruta, activa := range a.seleccionLote {
+		if activa {
+			rutas = append(rutas, ruta)
+		}
+	}
+	return rutas
+}
+
+func (a *Aplicacion) archivoPorRuta(ruta string) (modelo.Archivo, bool) {
+	for _, archivo := range a.elementos {
+		if archivo.Ruta == ruta {
+			return archivo, true
+		}
+	}
+	return modelo.Archivo{}, false
+}
+
+func (a *Aplicacion) moverSeleccionLote() {
+	destinoDir := strings.TrimSpace(a.editorDestinoLote.Text())
+	if destinoDir == "" {
+		a.establecerEstado("Indica una carpeta destino para mover la selección", nil)
+		return
+	}
+	a.procesarSeleccionLote(func(archivo modelo.Archivo) error {
+		destino := filepath.Join(destinoDir, filepath.Base(archivo.Ruta))
+		if err := a.servicioArchivos.Mover(context.Background(), archivo.Ruta, destino); err != nil {
+			return err
+		}
+		if err := a.almacen.EliminarArchivo(context.Background(), archivo.Ruta); err != nil {
+			return err
+		}
+		archivo.Ruta = destino
+		archivo.RutaPadre = filepath.Dir(destino)
+		archivo.Nombre = filepath.Base(destino)
+		return a.almacen.GuardarArchivo(context.Background(), archivo)
+	})
+}
+
+func (a *Aplicacion) archivarSeleccionLote() {
+	a.procesarSeleccionLote(func(archivo modelo.Archivo) error {
+		destino, err := archivarArchivoConFecha(context.Background(), a.servicioArchivos, archivo)
+		if err != nil {
+			return err
+		}
+		if err := a.almacen.EliminarArchivo(context.Background(), archivo.Ruta); err != nil {
+			return err
+		}
+		archivo.Ruta = destino
+		archivo.RutaPadre = filepath.Dir(destino)
+		archivo.Nombre = filepath.Base(destino)
+		return a.almacen.GuardarArchivo(context.Background(), archivo)
+	})
+}
+
+func archivarArchivoConFecha(ctx context.Context, servicio *archivos.Servicio, archivo modelo.Archivo) (string, error) {
+	if servicio == nil {
+		return "", errors.New("servicio de archivos no inicializado")
+	}
+	if !archivoTieneFechaYHoraArchivables(archivo) {
+		return "", errors.New("el archivo necesita fecha y hora guardadas para archivarse")
+	}
+	return servicio.ArchivarConFecha(ctx, archivo.Ruta, archivo.Metadatos.Fecha, archivo.Metadatos.Hora)
+}
+
+func (a *Aplicacion) enviarSeleccionLoteAPapelera() {
+	a.procesarSeleccionLote(func(archivo modelo.Archivo) error {
+		if err := a.servicioArchivos.EnviarAPapelera(context.Background(), archivo.Ruta); err != nil {
+			return err
+		}
+		return a.almacen.EliminarArchivo(context.Background(), archivo.Ruta)
+	})
+}
+
+func (a *Aplicacion) procesarSeleccionLote(accion func(archivo modelo.Archivo) error) {
+	rutas := a.rutasSeleccionadas()
+	if len(rutas) == 0 {
+		a.establecerEstado("No hay elementos seleccionados para la acción en lote", nil)
+		return
+	}
+
+	go func() {
+		var primerError error
+		procesados := 0
+		for _, ruta := range rutas {
+			archivo, ok := a.archivoPorRuta(ruta)
+			if !ok {
+				continue
+			}
+			if err := accion(archivo); err != nil && primerError == nil {
+				primerError = err
+			} else if err == nil {
+				procesados++
+			}
+		}
+
+		a.encolarActualizacion(func() {
+			a.seleccionLote = make(map[string]bool)
+			if primerError != nil {
+				a.establecerEstado(fmt.Sprintf("Acción por lotes con errores. %d elementos procesados", procesados), primerError)
+			} else {
+				a.establecerEstado(fmt.Sprintf("Acción por lotes completada para %d elementos", procesados), nil)
+			}
+			a.reiniciarListado()
+			a.recargarDuplicados()
+		})
+	}()
+}
+
+func (a *Aplicacion) recortarImagenActiva() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoImagen {
+		return
+	}
+	archivo := a.archivoActivo
+	if archivo.Ancho == 0 || archivo.Alto == 0 {
+		a.establecerEstado("No se conocen las dimensiones de la imagen para proponer un recorte", nil)
+		return
+	}
+
+	lado := archivo.Ancho
+	if archivo.Alto < lado {
+		lado = archivo.Alto
+	}
+	lado = int(float64(lado) * 0.9)
+	inicioX := maximo(0, (archivo.Ancho-lado)/2)
+	inicioY := maximo(0, (archivo.Alto-lado)/2)
+	rect := image.Rect(inicioX, inicioY, inicioX+lado, inicioY+lado)
+	salida := rutaDerivada(archivo.Ruta, "recorte", filepath.Ext(archivo.Ruta))
+
+	go func() {
+		err := a.servicioMetadatos.RecortarImagen(context.Background(), archivo.Ruta, rect, salida)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo recortar la imagen", err)
+				return
+			}
+			a.establecerEstado("Recorte generado junto al archivo original", nil)
+			a.reiniciarListado()
+		})
+	}()
+}
+
+func (a *Aplicacion) convertirImagenActiva() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoImagen {
+		return
+	}
+	formato := strings.TrimSpace(a.editorFormatoImagen.Text())
+	if formato == "" {
+		formato = "webp"
+	}
+	salida := rutaDerivada(a.archivoActivo.Ruta, "convertida", "."+strings.TrimPrefix(formato, "."))
+
+	go func() {
+		err := a.servicioMetadatos.ConvertirImagen(context.Background(), a.archivoActivo.Ruta, formato, salida)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo convertir la imagen", err)
+				return
+			}
+			a.establecerEstado("Imagen convertida correctamente", nil)
+			a.reiniciarListado()
+		})
+	}()
+}
+
+func (a *Aplicacion) extraerFrameActivo() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+		return
+	}
+	formato := strings.TrimSpace(a.editorFormatoFrame.Text())
+	if formato == "" {
+		formato = "png"
+	}
+	selector := strings.TrimSpace(a.editorSelectorFrame.Text())
+	salida := rutaDerivada(a.archivoActivo.Ruta, "frame", "."+strings.TrimPrefix(formato, "."))
+
+	go func() {
+		err := a.servicioMetadatos.ExtraerFrame(context.Background(), a.archivoActivo.Ruta, selector, formato, salida)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo extraer el frame del video", err)
+				return
+			}
+			a.establecerEstado("Frame extraído correctamente", nil)
+			a.reiniciarListado()
+		})
+	}()
+}
+
+func (a *Aplicacion) optimizarVideoActivo() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+		return
+	}
+	salida := rutaDerivada(a.archivoActivo.Ruta, "web", ".mp4")
+	sobreescribir := a.sobreescribirVideo.Value
+
+	go func() {
+		err := a.servicioMetadatos.OptimizarVideoWeb(context.Background(), a.archivoActivo.Ruta, salida, sobreescribir)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo optimizar el video", err)
+				return
+			}
+			a.establecerEstado("Video optimizado para web", nil)
+			a.reiniciarListado()
+		})
+	}()
+}
+
+func (a *Aplicacion) reproducirArchivoActivo() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+		return
+	}
+
+	ruta := a.archivoActivo.Ruta
+	go func() {
+		err := a.servicioArchivos.AbrirEnSistema(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo abrir el archivo en el sistema", err)
+				return
+			}
+			a.establecerEstado("Archivo abierto en el sistema", nil)
+		})
+	}()
+}
+
+func (a *Aplicacion) abrirCarpetaContenedoraArchivoActivo() {
+	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+		return
+	}
+
+	ruta := filepath.Dir(a.archivoActivo.Ruta)
+	go func() {
+		err := a.servicioArchivos.AbrirEnSistema(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo abrir la carpeta contenedora", err)
+				return
+			}
+			a.establecerEstado("Carpeta contenedora abierta en el sistema", nil)
+		})
+	}()
+}
+
+func (a *Aplicacion) guardarConfiguracion() {
+	nueva := a.configuracion
+	nueva.CarpetaInicial = strings.TrimSpace(a.editorCarpetaInicial.Text())
+	nueva.CarpetaArchivado = strings.TrimSpace(a.editorCarpetaArchivado.Text())
+	nueva.ClaveAPIYandex = strings.TrimSpace(a.editorClaveYandex.Text())
+	nueva.FiltrosPorDefecto = modelo.FiltrosListado{
+		MostrarOcultos:   a.configMostrarOcultos.Value,
+		OcultarCarpetas:  a.configOcultarCarpetas.Value,
+		SoloMultimedia:   a.configSoloMultimedia.Value,
+		SoloVideos:       a.configSoloVideos.Value,
+		SoloImagenes:     a.configSoloImagenes.Value,
+		SoloAudio:        a.configSoloAudio.Value,
+		Recursivo:        a.configRecursivo.Value,
+		OrdenDescendente: a.configOrdenDescendente.Value,
+		VistaGaleria:     true,
+	}
+
+	go func() {
+		err := a.repoConfiguracion.Guardar(nueva)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo guardar la configuración", err)
+				return
+			}
+			cfgNormalizada, err := configuracion.NormalizarConfiguracion(nueva)
+			if err != nil {
+				a.establecerEstado("La configuración se guardó, pero no se pudo normalizar en memoria", err)
+				return
+			}
+			a.configuracion = cfgNormalizada
+			a.filtros = cfgNormalizada.FiltrosPorDefecto
+			a.mostrarOcultos.Value = a.filtros.MostrarOcultos
+			a.ocultarCarpetas.Value = a.filtros.OcultarCarpetas
+			a.soloMultimedia.Value = a.filtros.SoloMultimedia
+			a.soloVideos.Value = a.filtros.SoloVideos
+			a.soloImagenes.Value = a.filtros.SoloImagenes
+			a.soloAudio.Value = a.filtros.SoloAudio
+			a.recursivo.Value = a.filtros.Recursivo
+			a.configMostrarOcultos.Value = a.filtros.MostrarOcultos
+			a.configOcultarCarpetas.Value = a.filtros.OcultarCarpetas
+			a.configSoloMultimedia.Value = a.filtros.SoloMultimedia
+			a.configSoloVideos.Value = a.filtros.SoloVideos
+			a.configSoloImagenes.Value = a.filtros.SoloImagenes
+			a.configSoloAudio.Value = a.filtros.SoloAudio
+			a.configRecursivo.Value = a.filtros.Recursivo
+			a.configOrdenDescendente.Value = a.filtros.OrdenDescendente
+			a.carpetaSeleccionada = cfgNormalizada.CarpetaInicial
+			a.origenListado = origenListadoCarpeta
+			a.claveListadoActual = cfgNormalizada.CarpetaInicial
+			a.servicioArchivos.ActualizarCarpetaArchivado(cfgNormalizada.CarpetaArchivado)
+			a.clienteYandex = yandex.NuevoClienteNulo(cfgNormalizada.ClaveAPIYandex)
+			a.reconstruirArbol()
+			a.reiniciarListado()
+			a.establecerEstado("Configuración guardada correctamente", nil)
+		})
+	}()
+}
+
+func (a *Aplicacion) alternarFiltrosDesdeUI() {
+	nuevosFiltros := modelo.FiltrosListado{
+		MostrarOcultos:   a.mostrarOcultos.Value,
+		OcultarCarpetas:  a.ocultarCarpetas.Value,
+		SoloMultimedia:   a.soloMultimedia.Value,
+		SoloVideos:       a.soloVideos.Value,
+		SoloImagenes:     a.soloImagenes.Value,
+		SoloAudio:        a.soloAudio.Value,
+		Recursivo:        a.recursivo.Value,
+		OrdenDescendente: a.filtros.OrdenDescendente,
+		VistaGaleria:     a.filtros.VistaGaleria,
+	}
+	if nuevosFiltros != a.filtros {
+		a.filtros = nuevosFiltros
+		a.reiniciarListado()
+	}
+}
+
+func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (image.Image, error) {
+	switch archivo.Tipo {
+	case modelo.TipoImagen:
+		if a.servicioMetadatos == nil {
+			return nil, errors.New("servicio de metadatos no inicializado")
+		}
+		return a.servicioMetadatos.GenerarPreviewImagen(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Orientacion)
+	case modelo.TipoVideo:
+		if a.servicioMetadatos == nil {
+			return nil, errors.New("servicio de metadatos no inicializado")
+		}
+		return a.servicioMetadatos.GenerarPreviewVideo(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Rotacion)
+	default:
+		if a.servicioMetadatos == nil {
+			return nil, errors.New("servicio de metadatos no inicializado")
+		}
+		return a.servicioMetadatos.GenerarPreviewImagen(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Orientacion)
+	}
+}
+
+func rutaDerivada(origen, sufijo, extension string) string {
+	base := strings.TrimSuffix(origen, filepath.Ext(origen))
+	return base + "-" + sufijo + extension
+}
+
+func partirListaCSV(texto string) []string {
+	partes := strings.Split(texto, ",")
+	vistos := make(map[string]struct{}, len(partes))
+	var salida []string
+	for _, parte := range partes {
+		parte = strings.TrimSpace(parte)
+		if parte == "" {
+			continue
+		}
+		clave := strings.ToLower(parte)
+		if _, existe := vistos[clave]; existe {
+			continue
+		}
+		vistos[clave] = struct{}{}
+		salida = append(salida, parte)
+	}
+	return salida
+}
+
+func formatearTamano(tamano int64) string {
+	if tamano <= 0 {
+		return "0 B"
+	}
+	return humanize.Bytes(uint64(tamano))
+}
+
+func formatearDuracion(duracion time.Duration) string {
+	if duracion <= 0 {
+		return "-"
+	}
+	totalSegundos := int(duracion.Round(time.Second) / time.Second)
+	horas := totalSegundos / 3600
+	minutos := (totalSegundos % 3600) / 60
+	segundos := totalSegundos % 60
+	if horas > 0 {
+		return fmt.Sprintf("%02d:%02d:%02d", horas, minutos, segundos)
+	}
+	return fmt.Sprintf("%02d:%02d", minutos, segundos)
+}
+
+func maximo(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minimo(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func tieneEtiquetaAdulta(etiquetas []string) bool {
+	for _, etiqueta := range etiquetas {
+		if strings.TrimSpace(strings.ToLower(etiqueta)) == "+18" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Aplicacion) previewOp(ruta string) (paint.ImageOp, bool) {
+	preview, existe := a.previews[ruta]
+	if !existe || preview == nil || preview.Imagen == nil {
+		return paint.ImageOp{}, false
+	}
+	return paint.NewImageOp(preview.Imagen), true
+}
+
+func compararTextoUI(izquierda, derecha string) bool {
+	izquierda = strings.ToLower(strings.TrimSpace(izquierda))
+	derecha = strings.ToLower(strings.TrimSpace(derecha))
+	if izquierda == derecha {
+		return strings.TrimSpace(izquierda) < strings.TrimSpace(derecha)
+	}
+	return izquierda < derecha
+}
+
+func convertirOpcionesLaterales(valores []string) []opcionFiltroLateral {
+	opciones := make([]opcionFiltroLateral, 0, len(valores))
+	for _, valor := range valores {
+		valor = strings.TrimSpace(valor)
+		if valor == "" {
+			continue
+		}
+		opciones = append(opciones, opcionFiltroLateral{
+			Clave:    valor,
+			Etiqueta: valor,
+		})
+	}
+	return opciones
+}
+
+func (a *Aplicacion) tituloListadoActual() string {
+	switch a.origenListado {
+	case origenListadoEtiqueta:
+		return "Tag: " + a.claveListadoActual
+	case origenListadoUbicacion:
+		return "Lugar: " + a.claveListadoActual
+	case origenListadoUbicacionSinNombre:
+		return "Lugar: " + etiquetaUbicacionSinNombre
+	default:
+		return a.carpetaSeleccionada
+	}
+}
+
+func (a *Aplicacion) esFiltroLateralActivo(origen tipoOrigenListado, clave string) bool {
+	if a.origenListado != origen {
+		return false
+	}
+	if origen == origenListadoUbicacionSinNombre {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(a.claveListadoActual), strings.TrimSpace(clave))
+}
+
+func (a *Aplicacion) asegurarWidgetLateral(clave string) *widget.Clickable {
+	if clic, existe := a.widgetsLateral[clave]; existe {
+		return clic
+	}
+	clic := &widget.Clickable{}
+	a.widgetsLateral[clave] = clic
+	return clic
+}
+
+func (a *Aplicacion) fusionarHijosNodo(nodo *nodoArbolUI, subdirectorios []indexador.NodoDirectorio) {
+	existentes := make(map[string]*nodoArbolUI, len(nodo.Hijos))
+	for _, hijo := range nodo.Hijos {
+		existentes[hijo.Ruta] = hijo
+	}
+
+	nuevos := make([]*nodoArbolUI, 0, len(subdirectorios))
+	for _, subdirectorio := range subdirectorios {
+		if previo, existe := existentes[subdirectorio.Ruta]; existe {
+			previo.Nombre = subdirectorio.Nombre
+			nuevos = append(nuevos, previo)
+			continue
+		}
+		nuevos = append(nuevos, &nodoArbolUI{
+			Ruta:    subdirectorio.Ruta,
+			Nombre:  subdirectorio.Nombre,
+			Cargado: false,
+		})
+	}
+
+	nodo.Hijos = nuevos
+}
+
+func (a *Aplicacion) cargarHijosNodoSincrono(nodo *nodoArbolUI) error {
+	if nodo == nil {
+		return nil
+	}
+	subdirectorios, err := a.listador.ListarSubdirectorios(context.Background(), nodo.Ruta, a.filtros.MostrarOcultos)
+	if err != nil {
+		return err
+	}
+	a.fusionarHijosNodo(nodo, subdirectorios)
+	sort.SliceStable(nodo.Hijos, func(i, j int) bool {
+		return compararTextoUI(nodo.Hijos[i].Nombre, nodo.Hijos[j].Nombre)
+	})
+	nodo.Cargado = true
+	nodo.Cargando = false
+	return nil
+}
+
+func (a *Aplicacion) sincronizarArbolConRuta(ruta string) error {
+	if a.raizArbol == nil || ruta == "" {
+		return nil
+	}
+
+	ruta = filepath.Clean(ruta)
+	raiz := filepath.Clean(a.raizArbol.Ruta)
+
+	relativa, err := filepath.Rel(raiz, ruta)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(relativa, "..") {
+		return nil
+	}
+
+	actual := a.raizArbol
+	actual.Expandido = true
+	if err := a.cargarHijosNodoSincrono(actual); err != nil {
+		return err
+	}
+
+	if relativa == "." {
+		return nil
+	}
+
+	partes := strings.Split(relativa, string(filepath.Separator))
+	for _, parte := range partes {
+		if parte == "" || parte == "." {
+			continue
+		}
+
+		if !actual.Cargado {
+			if err := a.cargarHijosNodoSincrono(actual); err != nil {
+				return err
+			}
+		}
+
+		var siguiente *nodoArbolUI
+		for _, hijo := range actual.Hijos {
+			if strings.EqualFold(hijo.Nombre, parte) {
+				siguiente = hijo
+				break
+			}
+		}
+		if siguiente == nil {
+			rutaHija := filepath.Join(actual.Ruta, parte)
+			siguiente = &nodoArbolUI{
+				Ruta:      rutaHija,
+				Nombre:    parte,
+				Expandido: false,
+				Cargado:   false,
+			}
+			actual.Hijos = append(actual.Hijos, siguiente)
+			sort.SliceStable(actual.Hijos, func(i, j int) bool {
+				return compararTextoUI(actual.Hijos[i].Nombre, actual.Hijos[j].Nombre)
+			})
+		}
+
+		siguiente.Expandido = true
+		actual = siguiente
+	}
+
+	if actual != nil {
+		actual.Expandido = true
+		a.asegurarHijosNodo(actual)
+	}
+
+	return nil
+}
