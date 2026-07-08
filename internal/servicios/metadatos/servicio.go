@@ -153,9 +153,14 @@ func (s *Servicio) GuardarMetadatos(ctx context.Context, ruta string, metadatos 
 	}
 
 	args := []string{
+		// IPTC usa Latin por omisión; forzamos UTF-8 para evitar que
+		// palabras clave y demás campos multilíngües terminen como "?".
+		"-charset",
+		"IPTC=UTF8",
 		"-overwrite_original_in_place",
 		"-P",
 		"-m",
+		"-codedcharacterset=UTF8",
 		"-Keywords=",
 		"-Subject=",
 		"-Description=",
