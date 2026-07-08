@@ -60,6 +60,66 @@ func TestGuardarMetadatosConCirlicoMantieneUTF8EnIPTC(t *testing.T) {
 	}
 }
 
+func TestGuardarMetadatosReemplazaPalabrasClaveYSujetosPrevios(t *testing.T) {
+	t.Parallel()
+
+	servicio := NuevoServicio()
+	if servicio.rutaExiftool == "" {
+		t.Skip("exiftool no está disponible")
+	}
+
+	directorioTemporal := t.TempDir()
+	rutaImagen := filepath.Join(directorioTemporal, "reemplazo.jpg")
+	crearJPEGPrueba(t, rutaImagen)
+
+	comandoInicial := exec.CommandContext(context.Background(), servicio.rutaExiftool,
+		"-overwrite_original_in_place",
+		"-P",
+		"-m",
+		"-charset", "IPTC=UTF8",
+		"-codedcharacterset=UTF8",
+		"-Keywords=старое",
+		"-Keywords=selfie",
+		"-Subject=Мария",
+		rutaImagen,
+	)
+	if salida, err := comandoInicial.CombinedOutput(); err != nil {
+		t.Fatalf("no se pudo preparar el estado inicial del archivo: %v: %s", err, strings.TrimSpace(string(salida)))
+	}
+
+	metadatos := modelo.MetadatosArchivo{
+		PalabrasClave: []string{"Марія Тагаєва", "selfie", "teléfono"},
+		Sujetos:       []string{"Марія Тагаєва", "selfie", "teléfono"},
+	}
+	if err := servicio.GuardarMetadatos(context.Background(), rutaImagen, metadatos); err != nil {
+		t.Fatalf("GuardarMetadatos devolvió error: %v", err)
+	}
+
+	comandoLectura := exec.CommandContext(context.Background(), servicio.rutaExiftool,
+		"-j",
+		"-G1",
+		"-a",
+		"-Keywords",
+		"-Subject",
+		rutaImagen,
+	)
+	salida, err := comandoLectura.CombinedOutput()
+	if err != nil {
+		t.Fatalf("no se pudieron leer los metadatos escritos: %v: %s", err, strings.TrimSpace(string(salida)))
+	}
+
+	texto := string(salida)
+	if strings.Contains(texto, "старое") || strings.Contains(texto, "Мария") {
+		t.Fatalf("persistieron valores previos que debieron reemplazarse; salida:\n%s", texto)
+	}
+	if !strings.Contains(texto, "\"IPTC:Keywords\": [\"Марія Тагаєва\",\"selfie\",\"teléfono\"]") {
+		t.Fatalf("IPTC:Keywords no quedó reemplazado correctamente; salida:\n%s", texto)
+	}
+	if !strings.Contains(texto, "\"XMP-dc:Subject\": [\"Марія Тагаєва\",\"selfie\",\"teléfono\"]") {
+		t.Fatalf("XMP-dc:Subject no quedó reemplazado correctamente; salida:\n%s", texto)
+	}
+}
+
 func crearJPEGPrueba(t *testing.T, ruta string) {
 	t.Helper()
 

@@ -198,14 +198,17 @@ func (s *Servicio) GuardarMetadatos(ctx context.Context, ruta string, metadatos 
 		if palabra == "" {
 			continue
 		}
-		args = append(args, "-Keywords+="+palabra)
+		// En etiquetas de lista, repetir -Keywords=valor reemplaza el
+		// conjunto completo tras el borrado inicial; usar += conserva los
+		// valores previos del archivo y duplica contenido no deseado.
+		args = append(args, "-Keywords="+palabra)
 	}
 	for _, sujeto := range sujetos {
 		sujeto = strings.TrimSpace(sujeto)
 		if sujeto == "" {
 			continue
 		}
-		args = append(args, "-Subject+="+sujeto)
+		args = append(args, "-Subject="+sujeto)
 	}
 
 	descripcion := strings.TrimSpace(metadatos.Comentario)
