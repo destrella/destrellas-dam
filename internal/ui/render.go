@@ -309,10 +309,37 @@ func (a *Aplicacion) dibujarVistaConfiguracion(gtx layout.Context) layout.Dimens
 					}),
 					layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.dibujarLineaChecks(gtx,
-							&a.configRecursivo, "Recursivo",
-							&a.configOrdenDescendente, "Orden descendente",
-						)
+						return material.CheckBox(a.tema, &a.configRecursivo, "Recursivo").Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarTextoSecundario(gtx, "Orden por defecto")
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						controlesOrden := []layout.Widget{
+							func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonNavegacion(gtx, &a.botonConfigOrdenAZ, "A-Z", a.criterioOrdenConfiguracion() == modelo.CriterioOrdenNombre && !a.configOrdenDescendente.Value, func() {
+									a.establecerOrdenConfiguracion(modelo.CriterioOrdenNombre, false)
+								})
+							},
+							func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonNavegacion(gtx, &a.botonConfigOrdenZA, "Z-A", a.criterioOrdenConfiguracion() == modelo.CriterioOrdenNombre && a.configOrdenDescendente.Value, func() {
+									a.establecerOrdenConfiguracion(modelo.CriterioOrdenNombre, true)
+								})
+							},
+							func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonNavegacion(gtx, &a.botonConfigOrdenAntiguos, "Más antiguos", a.criterioOrdenConfiguracion() == modelo.CriterioOrdenFechaModificacion && !a.configOrdenDescendente.Value, func() {
+									a.establecerOrdenConfiguracion(modelo.CriterioOrdenFechaModificacion, false)
+								})
+							},
+							func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonNavegacion(gtx, &a.botonConfigOrdenNuevos, "Más nuevos", a.criterioOrdenConfiguracion() == modelo.CriterioOrdenFechaModificacion && a.configOrdenDescendente.Value, func() {
+									a.establecerOrdenConfiguracion(modelo.CriterioOrdenFechaModificacion, true)
+								})
+							},
+						}
+						return a.dibujarFlujoControles(gtx, controlesOrden)
 					}),
 					layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -604,13 +631,23 @@ func (a *Aplicacion) dibujarControlesFiltros(gtx layout.Context) layout.Dimensio
 			})
 		},
 		func(gtx layout.Context) layout.Dimensions {
-			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenAZ, "A-Z", !a.filtros.OrdenDescendente, func() {
-				a.cambiarOrdenListado(false)
+			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenAZ, "A-Z", a.filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenNombre && !a.filtros.OrdenDescendente, func() {
+				a.cambiarOrdenListado(modelo.CriterioOrdenNombre, false)
 			})
 		},
 		func(gtx layout.Context) layout.Dimensions {
-			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenZA, "Z-A", a.filtros.OrdenDescendente, func() {
-				a.cambiarOrdenListado(true)
+			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenZA, "Z-A", a.filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenNombre && a.filtros.OrdenDescendente, func() {
+				a.cambiarOrdenListado(modelo.CriterioOrdenNombre, true)
+			})
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenAntiguos, "Más antiguos", a.filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion && !a.filtros.OrdenDescendente, func() {
+				a.cambiarOrdenListado(modelo.CriterioOrdenFechaModificacion, false)
+			})
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonNavegacion(gtx, &a.botonOrdenNuevos, "Más nuevos", a.filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion && a.filtros.OrdenDescendente, func() {
+				a.cambiarOrdenListado(modelo.CriterioOrdenFechaModificacion, true)
 			})
 		},
 	}

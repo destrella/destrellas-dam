@@ -383,11 +383,6 @@ func (a *Almacen) listarArchivosCatalogo(ctx context.Context, union string, cond
 		)
 	}
 
-	direccionOrden := "ASC"
-	if filtros.OrdenDescendente {
-		direccionOrden = "DESC"
-	}
-
 	consulta := fmt.Sprintf(`
 SELECT archivos.ruta, archivos.origen, archivos.ruta_padre, archivos.nombre, archivos.tamano, archivos.modificado_unix, archivos.tipo, archivos.es_oculto, archivos.es_directorio,
 	archivos.ancho, archivos.alto, archivos.duracion_ms, archivos.metadatos_json, archivos.hash_md5, archivos.hash_sha256, archivos.hash_dhash_imagen, archivos.hash_dhash_video,
@@ -395,8 +390,8 @@ SELECT archivos.ruta, archivos.origen, archivos.ruta_padre, archivos.nombre, arc
 FROM archivos
 %s
 WHERE %s
-ORDER BY archivos.nombre COLLATE NOCASE %s, archivos.nombre %s
-LIMIT ? OFFSET ?`, union, strings.Join(condiciones, "\n\tAND "), direccionOrden, direccionOrden)
+%s
+LIMIT ? OFFSET ?`, union, strings.Join(condiciones, "\n\tAND "), clausulaOrdenListado(filtros))
 
 	argumentosConsulta = append(argumentosConsulta, limite, offset)
 	filas, err := a.base.QueryContext(ctx, consulta, argumentosConsulta...)
@@ -415,6 +410,19 @@ LIMIT ? OFFSET ?`, union, strings.Join(condiciones, "\n\tAND "), direccionOrden,
 	}
 
 	return archivos, filas.Err()
+}
+
+func clausulaOrdenListado(filtros modelo.FiltrosListado) string {
+	direccionOrden := "ASC"
+	if filtros.OrdenDescendente {
+		direccionOrden = "DESC"
+	}
+
+	if filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion {
+		return fmt.Sprintf("ORDER BY archivos.modificado_unix %s, archivos.nombre COLLATE NOCASE ASC, archivos.nombre ASC, archivos.ruta ASC", direccionOrden)
+	}
+
+	return fmt.Sprintf("ORDER BY archivos.nombre COLLATE NOCASE %s, archivos.nombre %s, archivos.ruta ASC", direccionOrden, direccionOrden)
 }
 
 // asegurarIndiceEtiquetas rellena la tabla auxiliar de Subjects una sola vez por proceso.

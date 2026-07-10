@@ -209,6 +209,8 @@ type Aplicacion struct {
 	botonLista            widget.Clickable
 	botonOrdenAZ          widget.Clickable
 	botonOrdenZA          widget.Clickable
+	botonOrdenAntiguos    widget.Clickable
+	botonOrdenNuevos      widget.Clickable
 	editorFiltroEtiquetas widget.Editor
 	editorFiltroLugares   widget.Editor
 
@@ -297,7 +299,12 @@ type Aplicacion struct {
 	configSoloImagenes            widget.Bool
 	configSoloAudio               widget.Bool
 	configRecursivo               widget.Bool
+	configOrdenPorFecha           widget.Bool
 	configOrdenDescendente        widget.Bool
+	botonConfigOrdenAZ            widget.Clickable
+	botonConfigOrdenZA            widget.Clickable
+	botonConfigOrdenAntiguos      widget.Clickable
+	botonConfigOrdenNuevos        widget.Clickable
 	botonEscanearMetadatos        widget.Clickable
 	botonPausarEscaneo            widget.Clickable
 	botonGuardarRelacionUbicacion widget.Clickable
@@ -413,6 +420,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.configSoloImagenes.Value = appUI.configuracion.FiltrosPorDefecto.SoloImagenes
 	appUI.configSoloAudio.Value = appUI.configuracion.FiltrosPorDefecto.SoloAudio
 	appUI.configRecursivo.Value = appUI.configuracion.FiltrosPorDefecto.Recursivo
+	appUI.configOrdenPorFecha.Value = appUI.configuracion.FiltrosPorDefecto.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion
 	appUI.configOrdenDescendente.Value = appUI.configuracion.FiltrosPorDefecto.OrdenDescendente
 
 	appUI.reconstruirArbol()
@@ -672,17 +680,41 @@ func (a *Aplicacion) cambiarVistaCentral(esGaleria bool) {
 	}
 }
 
-func (a *Aplicacion) cambiarOrdenListado(descendente bool) {
-	if a.filtros.OrdenDescendente == descendente {
+func (a *Aplicacion) cambiarOrdenListado(criterio modelo.CriterioOrdenListado, descendente bool) {
+	criterio = criterio.Normalizado()
+	if a.filtros.CriterioOrdenNormalizado() == criterio && a.filtros.OrdenDescendente == descendente {
 		return
 	}
+	a.filtros.CriterioOrden = criterio
 	a.filtros.OrdenDescendente = descendente
 	a.reiniciarListado()
-	if descendente {
-		a.establecerEstado("Orden descendente activado", nil)
-	} else {
-		a.establecerEstado("Orden ascendente activado", nil)
+	a.establecerEstado(descripcionOrdenListado(criterio, descendente), nil)
+}
+
+func descripcionOrdenListado(criterio modelo.CriterioOrdenListado, descendente bool) string {
+	criterio = criterio.Normalizado()
+	if criterio == modelo.CriterioOrdenFechaModificacion {
+		if descendente {
+			return "Orden por fecha de modificación: más nuevos primero"
+		}
+		return "Orden por fecha de modificación: más antiguos primero"
 	}
+	if descendente {
+		return "Orden alfabético descendente activado"
+	}
+	return "Orden alfabético ascendente activado"
+}
+
+func (a *Aplicacion) establecerOrdenConfiguracion(criterio modelo.CriterioOrdenListado, descendente bool) {
+	a.configOrdenPorFecha.Value = criterio.Normalizado() == modelo.CriterioOrdenFechaModificacion
+	a.configOrdenDescendente.Value = descendente
+}
+
+func (a *Aplicacion) criterioOrdenConfiguracion() modelo.CriterioOrdenListado {
+	if a.configOrdenPorFecha.Value {
+		return modelo.CriterioOrdenFechaModificacion
+	}
+	return modelo.CriterioOrdenNombre
 }
 
 func (a *Aplicacion) reiniciarListado() {
@@ -1624,6 +1656,7 @@ func (a *Aplicacion) guardarConfiguracion() {
 		SoloImagenes:     a.configSoloImagenes.Value,
 		SoloAudio:        a.configSoloAudio.Value,
 		Recursivo:        a.configRecursivo.Value,
+		CriterioOrden:    a.criterioOrdenConfiguracion(),
 		OrdenDescendente: a.configOrdenDescendente.Value,
 		VistaGaleria:     true,
 	}
@@ -1656,6 +1689,7 @@ func (a *Aplicacion) guardarConfiguracion() {
 			a.configSoloImagenes.Value = a.filtros.SoloImagenes
 			a.configSoloAudio.Value = a.filtros.SoloAudio
 			a.configRecursivo.Value = a.filtros.Recursivo
+			a.configOrdenPorFecha.Value = a.filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion
 			a.configOrdenDescendente.Value = a.filtros.OrdenDescendente
 			a.carpetaSeleccionada = cfgNormalizada.CarpetaInicial
 			a.origenListado = origenListadoCarpeta
@@ -1678,6 +1712,7 @@ func (a *Aplicacion) alternarFiltrosDesdeUI() {
 		SoloImagenes:     a.soloImagenes.Value,
 		SoloAudio:        a.soloAudio.Value,
 		Recursivo:        a.recursivo.Value,
+		CriterioOrden:    a.filtros.CriterioOrdenNormalizado(),
 		OrdenDescendente: a.filtros.OrdenDescendente,
 		VistaGaleria:     a.filtros.VistaGaleria,
 	}

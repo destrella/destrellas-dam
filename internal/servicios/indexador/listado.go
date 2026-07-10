@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"destrellas-dam/internal/almacen"
 	"destrellas-dam/internal/modelo"
@@ -28,9 +29,8 @@ type SesionListado struct {
 	repo          almacen.Repositorio
 	ruta          string
 	filtros       modelo.FiltrosListado
-	archivo       *os.File
-	nombres       []string
-	indiceNombre  int
+	archivos      []modelo.Archivo
+	indiceArchivo int
 	finalizado    bool
 	agotado       chan struct{}
 	cancelar      context.CancelFunc
@@ -66,14 +66,7 @@ func (l *ListadorLocal) NuevaSesion(ctx context.Context, ruta string, filtros mo
 		return sesion, nil
 	}
 
-	archivo, err := os.Open(ruta)
-	if err != nil {
-		return nil, fmt.Errorf("no se pudo abrir la carpeta %q: %w", ruta, err)
-	}
-	nombres, err := leerNombresDirectorioOrdenados(archivo, filtros.OrdenDescendente)
-	if errCierre := archivo.Close(); err == nil && errCierre != nil {
-		err = errCierre
-	}
+	archivos, err := leerArchivosDirectorioOrdenados(ruta, filtros)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo preparar el listado de la carpeta %q: %w", ruta, err)
 	}
@@ -82,7 +75,7 @@ func (l *ListadorLocal) NuevaSesion(ctx context.Context, ruta string, filtros mo
 		repo:         l.repo,
 		ruta:         ruta,
 		filtros:      filtros,
-		nombres:      nombres,
+		archivos:     archivos,
 		agotado:      make(chan struct{}),
 		canalErrores: make(chan error, 1),
 	}, nil
@@ -138,7 +131,7 @@ func (s *SesionListado) Siguiente(ctx context.Context, limite int) ([]modelo.Arc
 		return nil, true, nil
 	}
 
-	if s.archivo != nil || s.nombres != nil {
+	if s.archivos != nil {
 		return s.siguienteNoRecursivo(ctx, limite)
 	}
 	return s.siguienteRecursivo(ctx, limite)
@@ -153,11 +146,6 @@ func (s *SesionListado) Cerrar() error {
 		s.cancelar()
 		s.cancelar = nil
 	}
-	if s.archivo != nil {
-		err := s.archivo.Close()
-		s.archivo = nil
-		return err
-	}
 	return nil
 }
 
@@ -171,20 +159,16 @@ func (s *SesionListado) siguienteNoRecursivo(ctx context.Context, limite int) ([
 		default:
 		}
 
-		for len(lote) < limite && s.indiceNombre < len(s.nombres) {
-			nombre := s.nombres[s.indiceNombre]
-			s.indiceNombre++
-			archivo, err := construirArchivoDesdeNombre(s.ruta, nombre)
-			if err != nil {
-				continue
-			}
+		for len(lote) < limite && s.indiceArchivo < len(s.archivos) {
+			archivo := s.archivos[s.indiceArchivo]
+			s.indiceArchivo++
 			if !s.filtros.Acepta(archivo) {
 				continue
 			}
 			lote = append(lote, s.enriquecerSiExiste(ctx, archivo))
 		}
 
-		if s.indiceNombre >= len(s.nombres) {
+		if s.indiceArchivo >= len(s.archivos) {
 			s.finalizado = true
 			break
 		}
@@ -249,51 +233,30 @@ func (s *SesionListado) recorrerRecursivo(ctx context.Context) {
 		actual := pendientes[len(pendientes)-1]
 		pendientes = pendientes[:len(pendientes)-1]
 
-		archivo, err := os.Open(actual)
+		elementos, err := leerArchivosDirectorioOrdenados(actual, s.filtros)
 		if err != nil {
-			s.enviarError(err)
+			s.enviarError(fmt.Errorf("no se pudo recorrer %q: %w", actual, err))
 			continue
 		}
 
-		for {
-			entradas, err := archivo.ReadDir(256)
-			if err != nil && err != io.EOF {
-				archivo.Close()
-				s.enviarError(fmt.Errorf("no se pudo recorrer %q: %w", actual, err))
-				break
+		var subdirectorios []string
+		for _, elemento := range elementos {
+			if debeOmitirDirectorioOculto(elemento.NombreVisible(), elemento.EsDirectorio, s.filtros.MostrarOcultos) {
+				continue
 			}
-			sort.SliceStable(entradas, func(i, j int) bool {
-				return compararNombreSegunOrden(entradas[i].Name(), entradas[j].Name(), s.filtros.OrdenDescendente)
-			})
-			var subdirectorios []string
-			for _, entrada := range entradas {
-				if debeOmitirDirectorioOculto(entrada.Name(), entrada.IsDir(), s.filtros.MostrarOcultos) {
-					continue
-				}
-				rutaCompleta := filepath.Join(actual, entrada.Name())
-				elemento, err := construirArchivoDesdeEntrada(actual, entrada)
-				if err != nil {
-					continue
-				}
-				if elemento.EsDirectorio {
-					subdirectorios = append(subdirectorios, rutaCompleta)
-				}
-				if s.filtros.Acepta(elemento) {
-					select {
-					case <-ctx.Done():
-						archivo.Close()
-						return
-					case s.canalArchivos <- elemento:
-					}
+			if elemento.EsDirectorio {
+				subdirectorios = append(subdirectorios, elemento.Ruta)
+			}
+			if s.filtros.Acepta(elemento) {
+				select {
+				case <-ctx.Done():
+					return
+				case s.canalArchivos <- elemento:
 				}
 			}
-			for indice := len(subdirectorios) - 1; indice >= 0; indice-- {
-				pendientes = append(pendientes, subdirectorios[indice])
-			}
-			if err == io.EOF {
-				archivo.Close()
-				break
-			}
+		}
+		for indice := len(subdirectorios) - 1; indice >= 0; indice-- {
+			pendientes = append(pendientes, subdirectorios[indice])
 		}
 	}
 }
@@ -339,44 +302,23 @@ func construirArchivoDesdeEntrada(rutaPadre string, entrada fs.DirEntry) (modelo
 	}, nil
 }
 
-func construirArchivoDesdeNombre(rutaPadre, nombre string) (modelo.Archivo, error) {
-	ruta := filepath.Join(rutaPadre, nombre)
-	info, err := os.Lstat(ruta)
+func leerArchivosDirectorioOrdenados(ruta string, filtros modelo.FiltrosListado) ([]modelo.Archivo, error) {
+	entradas, err := os.ReadDir(ruta)
 	if err != nil {
-		return modelo.Archivo{}, err
+		return nil, err
 	}
 
-	esDirectorio := info.IsDir() && !plataforma.EsBundle(ruta)
-	return modelo.Archivo{
-		Origen:       modelo.OrigenLocal,
-		Ruta:         ruta,
-		RutaPadre:    rutaPadre,
-		Nombre:       nombre,
-		Tamano:       info.Size(),
-		Modificado:   info.ModTime(),
-		Tipo:         modelo.TipoDesdeRuta(ruta, esDirectorio),
-		EsOculto:     modelo.EsOcultoPorNombre(nombre),
-		EsDirectorio: esDirectorio,
-	}, nil
-}
-
-func leerNombresDirectorioOrdenados(archivo *os.File, descendente bool) ([]string, error) {
-	var nombres []string
-	for {
-		lote, err := archivo.Readdirnames(512)
-		if err != nil && err != io.EOF {
-			return nil, err
+	archivos := make([]modelo.Archivo, 0, len(entradas))
+	for _, entrada := range entradas {
+		archivo, err := construirArchivoDesdeEntrada(ruta, entrada)
+		if err != nil {
+			continue
 		}
-		nombres = append(nombres, lote...)
-		if err == io.EOF {
-			break
-		}
+		archivos = append(archivos, archivo)
 	}
 
-	sort.SliceStable(nombres, func(i, j int) bool {
-		return compararNombreSegunOrden(nombres[i], nombres[j], descendente)
-	})
-	return nombres, nil
+	ordenarArchivosSegunFiltros(archivos, filtros)
+	return archivos, nil
 }
 
 func debeOmitirDirectorioOculto(nombre string, esDirectorio bool, mostrarOcultos bool) bool {
@@ -401,19 +343,76 @@ func maximo(a, b int) int {
 }
 
 func compararNombre(izquierda, derecha string) bool {
-	izquierda = strings.ToLower(strings.TrimSpace(izquierda))
-	derecha = strings.ToLower(strings.TrimSpace(derecha))
-	if izquierda == derecha {
-		return strings.TrimSpace(izquierda) < strings.TrimSpace(derecha)
-	}
-	return izquierda < derecha
+	return compararTextoNormalizado(izquierda, derecha) < 0
 }
 
 func compararNombreSegunOrden(izquierda, derecha string, descendente bool) bool {
+	comparacion := compararTextoNormalizado(izquierda, derecha)
 	if descendente {
-		return compararNombre(derecha, izquierda)
+		comparacion = -comparacion
 	}
-	return compararNombre(izquierda, derecha)
+	return comparacion < 0
+}
+
+func ordenarArchivosSegunFiltros(archivos []modelo.Archivo, filtros modelo.FiltrosListado) {
+	sort.SliceStable(archivos, func(i, j int) bool {
+		return compararArchivosSegunFiltros(archivos[i], archivos[j], filtros) < 0
+	})
+}
+
+func compararArchivosSegunFiltros(izquierda, derecha modelo.Archivo, filtros modelo.FiltrosListado) int {
+	if filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenFechaModificacion {
+		comparacion := compararInstantes(izquierda.Modificado, derecha.Modificado)
+		if filtros.OrdenDescendente {
+			comparacion = -comparacion
+		}
+		if comparacion != 0 {
+			return comparacion
+		}
+	}
+
+	comparacionNombre := compararTextoNormalizado(izquierda.NombreVisible(), derecha.NombreVisible())
+	if filtros.CriterioOrdenNormalizado() == modelo.CriterioOrdenNombre && filtros.OrdenDescendente {
+		comparacionNombre = -comparacionNombre
+	}
+	if comparacionNombre != 0 {
+		return comparacionNombre
+	}
+
+	return compararTextoNormalizado(izquierda.Ruta, derecha.Ruta)
+}
+
+func compararTextoNormalizado(izquierda, derecha string) int {
+	izquierdaNormalizada := strings.ToLower(strings.TrimSpace(izquierda))
+	derechaNormalizada := strings.ToLower(strings.TrimSpace(derecha))
+	switch {
+	case izquierdaNormalizada < derechaNormalizada:
+		return -1
+	case izquierdaNormalizada > derechaNormalizada:
+		return 1
+	}
+
+	izquierdaAjustada := strings.TrimSpace(izquierda)
+	derechaAjustada := strings.TrimSpace(derecha)
+	switch {
+	case izquierdaAjustada < derechaAjustada:
+		return -1
+	case izquierdaAjustada > derechaAjustada:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compararInstantes(izquierda, derecha time.Time) int {
+	switch {
+	case izquierda.Before(derecha):
+		return -1
+	case izquierda.After(derecha):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func fusionarArchivoCatalogoConSistema(archivoSistema, archivoCatalogo modelo.Archivo) modelo.Archivo {
