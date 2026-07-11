@@ -523,13 +523,30 @@ func textoIAArchivo(archivo modelo.Archivo) string {
 
 func inferirRedSocial(whereFroms []string) string {
 	patrones := map[string]string{
-		"instagram.com": "Instagram",
-		"onlyfans.com":  "OnlyFans",
-		"tiktok.com":    "TikTok",
-		"facebook.com":  "Facebook",
-		"x.com":         "X",
-		"twitter.com":   "Twitter",
-		"reddit.com":    "Reddit",
+		"instagram.com":  "Instagram",
+		"onlyfans.com":   "OnlyFans",
+		"tiktok.com":     "TikTok",
+		"facebook.com":   "Facebook",
+		".x.com":         "X",
+		"telegram.org":   "Telegram",
+		"twitter.com":    "Twitter",
+		"reddit.com":     "Reddit",
+		"redd.it":        "Reddit",
+		"pinterest.com":  "Pinterest",
+		"tumblr.com":     "Tumblr",
+		"flickr.com":     "Flickr",
+		"vk.com":         "VK",
+		"weibo.com":      "Weibo",
+		"bilibili.com":   "Bilibili",
+		"twitch.tv":      "Twitch",
+		"youtube.com":    "YouTube",
+		"vimeo.com":      "Vimeo",
+		"deviantart.com": "DeviantArt",
+		"behance.net":    "Behance",
+		"dribbble.com":   "Dribbble",
+		"medium.com":     "Medium",
+		"patreon.com":    "Patreon",
+		"hidden.com":     "Hidden",
 	}
 	for _, valor := range whereFroms {
 		valor = strings.ToLower(valor)
