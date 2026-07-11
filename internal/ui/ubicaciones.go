@@ -328,6 +328,7 @@ func (a *Aplicacion) dibujarDetalleUbicacionGuardada(gtx layout.Context) layout.
 		Pais:   ubicacion.Pais,
 	}
 	sugerenciasRelacion := a.sugerenciasRelacionUbicacion()
+	usosUbicacion := a.usosUbicacionSeleccionada
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -423,11 +424,11 @@ func (a *Aplicacion) dibujarDetalleUbicacionGuardada(gtx layout.Context) layout.
 							if a.cargandoUsosUbicacion {
 								return a.dibujarTextoSecundario(gtx, "Cargando usos de la ubicación seleccionada...")
 							}
-							if len(a.usosUbicacionSeleccionada) == 0 {
+							if len(usosUbicacion) == 0 {
 								return a.dibujarTextoSecundario(gtx, "Este nombre todavía no tiene usos directos con coordenadas o dirección guardadas.")
 							}
-							return a.dibujarListaConBarra(gtx, &a.listaUsosUbicacion, len(a.usosUbicacionSeleccionada), func(gtx layout.Context, indice int) layout.Dimensions {
-								uso := a.usosUbicacionSeleccionada[indice]
+							return a.dibujarListaConBarra(gtx, &a.listaUsosUbicacion, len(usosUbicacion), func(gtx layout.Context, indice int) layout.Dimensions {
+								uso := usosUbicacion[indice]
 								return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 									return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
 										return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {

@@ -915,16 +915,18 @@ func (a *Aplicacion) dibujarListaElementos(gtx layout.Context) layout.Dimensions
 		return a.dibujarTextoPrincipal(gtx, "Sin resultados para los filtros actuales.")
 	}
 
+	elementos := a.elementos
+
 	if a.mostrarAgrupacionRecursivaPorCarpeta() {
 		return a.dibujarListaElementosAgrupados(gtx)
 	}
 
-	return a.dibujarListaConBarra(gtx, &a.listaCentro, len(a.elementos), func(gtx layout.Context, indice int) layout.Dimensions {
-		if indice >= len(a.elementos)-2 {
+	return a.dibujarListaConBarra(gtx, &a.listaCentro, len(elementos), func(gtx layout.Context, indice int) layout.Dimensions {
+		if indice >= len(elementos)-2 {
 			a.cargarMasElementos()
 		}
 		return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return a.dibujarFilaElemento(gtx, a.elementos[indice])
+			return a.dibujarFilaElemento(gtx, elementos[indice])
 		})
 	})
 }
@@ -937,13 +939,14 @@ func (a *Aplicacion) dibujarGaleria(gtx layout.Context) layout.Dimensions {
 		return a.dibujarTextoPrincipal(gtx, "Sin resultados para la galería.")
 	}
 
+	elementos := a.elementos
 	columnas, anchoTarjeta, separacion := a.parametrosGaleria(gtx)
 
 	if a.mostrarAgrupacionRecursivaPorCarpeta() {
 		return a.dibujarGaleriaAgrupada(gtx, columnas, anchoTarjeta, separacion)
 	}
 
-	filas := int(math.Ceil(float64(len(a.elementos)) / float64(columnas)))
+	filas := int(math.Ceil(float64(len(elementos)) / float64(columnas)))
 
 	return a.dibujarListaConBarra(gtx, &a.listaCentro, filas, func(gtx layout.Context, fila int) layout.Dimensions {
 		if fila >= filas-1 {
@@ -951,9 +954,9 @@ func (a *Aplicacion) dibujarGaleria(gtx layout.Context) layout.Dimensions {
 		}
 
 		inicio := fila * columnas
-		fin := minimo(inicio+columnas, len(a.elementos))
+		fin := minimo(inicio+columnas, len(elementos))
 		return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return a.dibujarFilaGaleriaConAncho(gtx, a.elementos[inicio:fin], anchoTarjeta)
+			return a.dibujarFilaGaleriaConAncho(gtx, elementos[inicio:fin], anchoTarjeta)
 		})
 	})
 }
@@ -1754,8 +1757,10 @@ func (a *Aplicacion) dibujarListaDuplicados(gtx layout.Context) layout.Dimension
 		return a.dibujarTextoPrincipal(gtx, "Todavía no hay grupos para esta combinación de filtros.")
 	}
 
-	return a.dibujarListaConBarra(gtx, &a.listaDuplicados, len(a.gruposDuplicados), func(gtx layout.Context, indice int) layout.Dimensions {
-		grupo := a.gruposDuplicados[indice]
+	grupos := a.gruposDuplicados
+
+	return a.dibujarListaConBarra(gtx, &a.listaDuplicados, len(grupos), func(gtx layout.Context, indice int) layout.Dimensions {
+		grupo := grupos[indice]
 		return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarGrupoDuplicado(gtx, grupo)
 		})
