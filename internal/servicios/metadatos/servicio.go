@@ -383,18 +383,203 @@ func (s *Servicio) ConvertirImagen(ctx context.Context, origen, formato, salida 
 	return nil
 }
 
-// RecortarImagen recorta una region y deja el archivo resultante junto al original.
-func (s *Servicio) RecortarImagen(ctx context.Context, origen string, rect image.Rectangle, salida string) error {
+// RecortarImagen recorta una region y devuelve la ruta final del archivo generado.
+func (s *Servicio) RecortarImagen(ctx context.Context, archivo modelo.Archivo, rect image.Rectangle, salida string, reemplazarOriginal bool) (string, error) {
 	if s.rutaMagick == "" {
-		return errors.New("ImageMagick no esta disponible")
+		return "", errors.New("ImageMagick no esta disponible")
+	}
+	if strings.TrimSpace(archivo.Ruta) == "" {
+		return "", errors.New("la ruta del archivo a recortar esta vacia")
+	}
+	if rect.Dx() <= 0 || rect.Dy() <= 0 {
+		return "", errors.New("el rectangulo de recorte no es valido")
 	}
 
+	destinoFinal := strings.TrimSpace(salida)
+	if reemplazarOriginal {
+		destinoFinal = archivo.Ruta
+	} else {
+		rutaLibre, err := rutaDisponibleLocal(destinoFinal)
+		if err != nil {
+			return "", err
+		}
+		destinoFinal = rutaLibre
+	}
+
+	destinoTemporal, limpiarTemporal, err := crearRutaTemporalCercana(destinoFinal)
+	if err != nil {
+		return "", err
+	}
+	defer limpiarTemporal()
+
 	geometria := fmt.Sprintf("%dx%d+%d+%d", rect.Dx(), rect.Dy(), rect.Min.X, rect.Min.Y)
-	comando := exec.CommandContext(ctx, s.rutaMagick, origen, "-crop", geometria, "+repage", salida)
+	comando := exec.CommandContext(ctx, s.rutaMagick, archivo.Ruta, "-auto-orient", "-crop", geometria, "+repage", destinoTemporal)
 	if salidaComando, err := comando.CombinedOutput(); err != nil {
-		return fmt.Errorf("no se pudo recortar la imagen: %w: %s", err, strings.TrimSpace(string(salidaComando)))
+		return "", fmt.Errorf("no se pudo recortar la imagen: %w: %s", err, strings.TrimSpace(string(salidaComando)))
+	}
+	if err := s.copiarMetadatosImagenRecortada(ctx, archivo, rect, destinoTemporal); err != nil {
+		return "", err
+	}
+	if err := plataforma.CopiarWhereFroms(ctx, archivo.Ruta, destinoTemporal); err != nil {
+		return "", err
+	}
+	if err := os.Rename(destinoTemporal, destinoFinal); err != nil {
+		return "", fmt.Errorf("no se pudo finalizar el archivo recortado: %w", err)
+	}
+	return destinoFinal, nil
+}
+
+func (s *Servicio) copiarMetadatosImagenRecortada(ctx context.Context, archivo modelo.Archivo, rect image.Rectangle, destino string) error {
+	if s.rutaExiftool == "" {
+		return errors.New("exiftool no esta disponible para heredar metadatos del recorte")
+	}
+
+	args := []string{
+		"-charset",
+		"IPTC=UTF8",
+		"-overwrite_original_in_place",
+		"-P",
+		"-m",
+		"-codedcharacterset=UTF8",
+		"-TagsFromFile",
+		archivo.Ruta,
+		"-all:all",
+		"--Orientation",
+		"--Rotation",
+		"--ImageWidth",
+		"--ImageHeight",
+		"--ExifImageWidth",
+		"--ExifImageHeight",
+		"--PixelXDimension",
+		"--PixelYDimension",
+		"--SourceImageWidth",
+		"--SourceImageHeight",
+		"--ThumbnailImage",
+		"--PreviewImage",
+		"--PreviewPICT",
+		"--JpgFromRaw",
+		"--RegionInfo",
+		"-Orientation#=1",
+		destino,
+	}
+	comando := exec.CommandContext(ctx, s.rutaExiftool, args...)
+	if salida, err := comando.CombinedOutput(); err != nil {
+		return fmt.Errorf("no se pudieron heredar los metadatos del recorte: %w: %s", err, strings.TrimSpace(string(salida)))
+	}
+
+	regiones := recalcularRegionesTrasRecorte(archivo, rect)
+	if len(archivo.Metadatos.Regiones) > 0 || archivo.Indicadores.TieneRegiones {
+		if err := s.GuardarRegiones(ctx, modelo.Archivo{
+			Ruta:  destino,
+			Tipo:  modelo.TipoImagen,
+			Ancho: rect.Dx(),
+			Alto:  rect.Dy(),
+		}, regiones); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func recalcularRegionesTrasRecorte(archivo modelo.Archivo, rect image.Rectangle) []modelo.RegionEtiquetada {
+	if len(archivo.Metadatos.Regiones) == 0 || rect.Dx() <= 0 || rect.Dy() <= 0 {
+		return nil
+	}
+
+	ancho, alto := dimensionesOrientadasArchivoRecorte(archivo)
+	if ancho <= 0 || alto <= 0 {
+		return nil
+	}
+
+	recorte := modelo.RegionEtiquetada{
+		X:     float64(rect.Min.X) / float64(ancho),
+		Y:     float64(rect.Min.Y) / float64(alto),
+		Ancho: float64(rect.Dx()) / float64(ancho),
+		Alto:  float64(rect.Dy()) / float64(alto),
+	}
+
+	regiones := make([]modelo.RegionEtiquetada, 0, len(archivo.Metadatos.Regiones))
+	for _, regionOriginal := range archivo.Metadatos.Regiones {
+		regionOrientada := modelo.TransformarRegionOrientada(regionOriginal, archivo.Metadatos.Orientacion)
+		interseccion, ok := interseccionRegionNormalizada(regionOrientada, recorte)
+		if !ok {
+			continue
+		}
+		regiones = append(regiones, modelo.RegionEtiquetada{
+			Nombre: regionOriginal.Nombre,
+			X:      limitarDecimalRegion((interseccion.X - recorte.X) / recorte.Ancho),
+			Y:      limitarDecimalRegion((interseccion.Y - recorte.Y) / recorte.Alto),
+			Ancho:  limitarDecimalRegion(interseccion.Ancho / recorte.Ancho),
+			Alto:   limitarDecimalRegion(interseccion.Alto / recorte.Alto),
+		})
+	}
+	return regiones
+}
+
+func interseccionRegionNormalizada(a, b modelo.RegionEtiquetada) (modelo.RegionEtiquetada, bool) {
+	inicioX := math.Max(a.X, b.X)
+	inicioY := math.Max(a.Y, b.Y)
+	finX := math.Min(a.X+a.Ancho, b.X+b.Ancho)
+	finY := math.Min(a.Y+a.Alto, b.Y+b.Alto)
+	if finX <= inicioX || finY <= inicioY {
+		return modelo.RegionEtiquetada{}, false
+	}
+	return modelo.RegionEtiquetada{
+		X:     inicioX,
+		Y:     inicioY,
+		Ancho: finX - inicioX,
+		Alto:  finY - inicioY,
+	}, true
+}
+
+func dimensionesOrientadasArchivoRecorte(archivo modelo.Archivo) (int, int) {
+	ancho := archivo.Ancho
+	alto := archivo.Alto
+	switch modelo.NormalizarOrientacionVisual(archivo.Metadatos.Orientacion) {
+	case 5, 6, 7, 8:
+		ancho, alto = alto, ancho
+	}
+	return ancho, alto
+}
+
+func crearRutaTemporalCercana(destino string) (string, func(), error) {
+	directorio := filepath.Dir(destino)
+	patron := strings.TrimSuffix(filepath.Base(destino), filepath.Ext(destino)) + "-tmp-*" + filepath.Ext(destino)
+	archivoTemporal, err := os.CreateTemp(directorio, patron)
+	if err != nil {
+		return "", nil, fmt.Errorf("no se pudo preparar el archivo temporal del recorte: %w", err)
+	}
+	rutaTemporal := archivoTemporal.Name()
+	if err := archivoTemporal.Close(); err != nil {
+		os.Remove(rutaTemporal)
+		return "", nil, fmt.Errorf("no se pudo cerrar el archivo temporal del recorte: %w", err)
+	}
+	if err := os.Remove(rutaTemporal); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", nil, fmt.Errorf("no se pudo liberar el archivo temporal del recorte: %w", err)
+	}
+	limpiar := func() {
+		_ = os.Remove(rutaTemporal)
+	}
+	return rutaTemporal, limpiar, nil
+}
+
+func rutaDisponibleLocal(destino string) (string, error) {
+	if strings.TrimSpace(destino) == "" {
+		return "", errors.New("la ruta de salida del recorte esta vacia")
+	}
+	if _, err := os.Stat(destino); errors.Is(err, os.ErrNotExist) {
+		return destino, nil
+	}
+
+	extension := filepath.Ext(destino)
+	base := strings.TrimSuffix(destino, extension)
+	for indice := 1; indice < 10_000; indice++ {
+		candidato := fmt.Sprintf("%s-%d%s", base, indice, extension)
+		if _, err := os.Stat(candidato); errors.Is(err, os.ErrNotExist) {
+			return candidato, nil
+		}
+	}
+	return "", fmt.Errorf("no se pudo encontrar una ruta libre para %q", destino)
 }
 
 // ExtraerFrame crea una imagen a partir de un punto del video.

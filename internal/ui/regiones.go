@@ -150,6 +150,11 @@ func (a *Aplicacion) alternarEtiquetadoRegiones() {
 		a.edicionRegiones.SolicitarFocoNombre = true
 		return
 	}
+	if !a.edicionRegiones.Etiquetando {
+		a.edicionRecorte.Activo = false
+		a.edicionRecorte.Arrastrando = false
+		a.edicionRecorte.Modo = modoRecorteNinguno
+	}
 	a.edicionRegiones.Etiquetando = !a.edicionRegiones.Etiquetando
 	if !a.edicionRegiones.Etiquetando {
 		a.edicionRegiones.Arrastrando = false

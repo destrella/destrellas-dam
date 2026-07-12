@@ -167,6 +167,7 @@ type Aplicacion struct {
 	metadatosVerificados map[string]int64
 	reproductorVideo     estadoReproductorVideo
 	edicionRegiones      estadoEdicionRegiones
+	edicionRecorte       estadoEdicionRecorte
 
 	gruposDuplicados         []modelo.GrupoDuplicados
 	tipoCoincidenciaActual   modelo.TipoCoincidencia
@@ -263,7 +264,9 @@ type Aplicacion struct {
 	botonAgregarRegion             widget.Clickable
 	botonLimpiarRegiones           widget.Clickable
 	botonGuardarRegiones           widget.Clickable
+	botonSeleccionarRecorte        widget.Clickable
 	botonRecortar                  widget.Clickable
+	reemplazarOriginalRecorte      widget.Bool
 	botonConvertir                 widget.Clickable
 	botonExtraerFrame              widget.Clickable
 	botonOptimizarVideo            widget.Clickable
@@ -393,6 +396,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorSoftware.SingleLine = true
 	appUI.editorFormatoImagen.SingleLine = true
 	appUI.editorFormatoImagen.SetText("webp")
+	appUI.reemplazarOriginalRecorte.Value = true
 	appUI.formatoExtraccionFrame = "webp"
 	appUI.editorFiltroEtiquetas.SingleLine = true
 	appUI.editorFiltroLugares.SingleLine = true
@@ -1027,6 +1031,7 @@ func (a *Aplicacion) refrescarArchivoActivoDesdeCatalogo() {
 	a.sincronizarEditoresMetadatos(archivo)
 	a.reemplazarArchivoEnMemoria(archivo)
 	a.sincronizarEdicionRegiones(archivo)
+	a.sincronizarEdicionRecorte(archivo)
 	a.solicitarSalidaExiftool(archivo, true)
 }
 
@@ -1034,6 +1039,7 @@ func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 	a.archivoActivo = archivo
 	a.tieneArchivoActivo = true
 	a.sincronizarEdicionRegiones(archivo)
+	a.sincronizarEdicionRecorte(archivo)
 	a.sincronizarEditoresMetadatos(archivo)
 	a.solicitarSalidaExiftool(archivo, false)
 	a.editorDestinoMover.SetText(filepath.Dir(archivo.Ruta))
@@ -1183,6 +1189,7 @@ func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) 
 			if a.tieneArchivoActivo && a.archivoActivo.Ruta == enriquecido.Ruta {
 				a.archivoActivo = enriquecido
 				a.sincronizarEdicionRegiones(enriquecido)
+				a.sincronizarEdicionRecorte(enriquecido)
 				a.sincronizarEditoresMetadatos(enriquecido)
 			}
 			if len(enriquecido.Metadatos.PalabrasClave) > 0 || len(enriquecido.Metadatos.Sujetos) > 0 || enriquecido.Metadatos.Ubicacion != "" || enriquecido.Metadatos.Coordenadas != nil {
@@ -1320,6 +1327,7 @@ func (a *Aplicacion) moverArchivoActivo() {
 			}
 			a.tieneArchivoActivo = false
 			a.descartarEdicionRegiones()
+			a.descartarEdicionRecorte()
 			a.limpiarReproductorVideo()
 			a.reiniciarListado()
 			a.recargarDuplicados()
@@ -1362,6 +1370,7 @@ func (a *Aplicacion) archivarArchivoActivo() {
 			}
 			a.tieneArchivoActivo = false
 			a.descartarEdicionRegiones()
+			a.descartarEdicionRecorte()
 			a.limpiarReproductorVideo()
 			a.reiniciarListado()
 			a.recargarDuplicados()
@@ -1390,6 +1399,7 @@ func (a *Aplicacion) enviarArchivoActivoAPapelera() {
 			}
 			a.tieneArchivoActivo = false
 			a.descartarEdicionRegiones()
+			a.descartarEdicionRecorte()
 			a.limpiarReproductorVideo()
 			a.reiniciarListado()
 			a.recargarDuplicados()
@@ -1512,30 +1522,91 @@ func (a *Aplicacion) recortarImagenActiva() {
 		return
 	}
 	archivo := a.archivoActivo
+	a.sincronizarEdicionRecorte(archivo)
+	if a.edicionRecorte.Guardando {
+		return
+	}
+	if a.hayCambiosPendientesRegiones() || a.edicionRegiones.RegionPendiente != nil {
+		a.establecerEstado("Guarda o limpia primero los cambios pendientes de regiones antes de recortar la imagen", nil)
+		return
+	}
 	if archivo.Ancho == 0 || archivo.Alto == 0 {
 		a.establecerEstado("No se conocen las dimensiones de la imagen para proponer un recorte", nil)
 		return
 	}
 
-	lado := archivo.Ancho
-	if archivo.Alto < lado {
-		lado = archivo.Alto
+	rect, ok := a.rectanguloRecorteActivoPixeles(archivo)
+	if !ok {
+		if sugerencia, sugerida := a.sugerenciaRecorte(archivo); sugerida {
+			rect, ok = rectanguloRecortePixelesParaRegion(archivo, sugerencia)
+			if ok {
+				a.edicionRecorte.Seleccion = sugerencia
+				a.edicionRecorte.TieneSeleccion = true
+				a.edicionRecorte.Sugerida = true
+			}
+		}
 	}
-	lado = int(float64(lado) * 0.9)
-	inicioX := maximo(0, (archivo.Ancho-lado)/2)
-	inicioY := maximo(0, (archivo.Alto-lado)/2)
-	rect := image.Rect(inicioX, inicioY, inicioX+lado, inicioY+lado)
+	if !ok {
+		anchoOrientado, altoOrientado := dimensionesOrientadasArchivo(archivo)
+		lado := anchoOrientado
+		if altoOrientado < lado {
+			lado = altoOrientado
+		}
+		lado = int(float64(lado) * 0.9)
+		inicioX := maximo(0, (anchoOrientado-lado)/2)
+		inicioY := maximo(0, (altoOrientado-lado)/2)
+		rect = image.Rect(inicioX, inicioY, inicioX+lado, inicioY+lado)
+	}
 	salida := rutaDerivada(archivo.Ruta, "recorte", filepath.Ext(archivo.Ruta))
+	reemplazarOriginal := a.reemplazarOriginalRecorte.Value
+	a.edicionRecorte.Guardando = true
 
 	go func() {
-		err := a.servicioMetadatos.RecortarImagen(context.Background(), archivo.Ruta, rect, salida)
+		rutaFinal, err := a.servicioMetadatos.RecortarImagen(context.Background(), archivo, rect, salida, reemplazarOriginal)
+		archivoActualizado, errAnalisis := modelo.Archivo{}, error(nil)
+		errCatalogo := error(nil)
+		if err == nil {
+			archivoActualizado, errAnalisis = a.analizarArchivoLocalEnRuta(context.Background(), rutaFinal)
+			if errAnalisis == nil {
+				errCatalogo = a.almacen.GuardarArchivo(context.Background(), archivoActualizado)
+			}
+		}
 		a.encolarActualizacion(func() {
+			a.edicionRecorte.Guardando = false
 			if err != nil {
 				a.establecerEstado("No se pudo recortar la imagen", err)
 				return
 			}
-			a.establecerEstado("Recorte generado junto al archivo original", nil)
+			delete(a.previews, archivo.Ruta)
+			delete(a.previews, rutaFinal)
+			delete(a.metadatosPendientes, archivo.Ruta)
+			delete(a.metadatosPendientes, rutaFinal)
+			delete(a.metadatosVerificados, archivo.Ruta)
+			delete(a.metadatosVerificados, rutaFinal)
+			a.descartarEdicionRecorte()
+			a.descartarEdicionRegiones()
+			if archivoActualizado.Ruta != "" {
+				if errAnalisis == nil {
+					a.marcarArchivoVerificadoConSistema(archivoActualizado)
+				}
+				a.activarArchivo(archivoActualizado)
+			}
+			mensaje := "Imagen recortada creada"
+			if reemplazarOriginal {
+				mensaje = "Imagen recortada reemplazando el archivo original"
+			} else {
+				mensaje = "Imagen recortada creada y abierta en el visor"
+			}
+			if errAnalisis != nil {
+				a.establecerEstado(mensaje+" con incidencias al refrescar el catálogo", errAnalisis)
+			} else if errCatalogo != nil {
+				a.establecerEstado(mensaje+" con incidencias al guardar en el catálogo", errCatalogo)
+			} else {
+				a.establecerEstado(mensaje, nil)
+			}
 			a.reiniciarListado()
+			a.recargarColeccionesLaterales()
+			a.recargarDuplicados()
 		})
 	}()
 }
@@ -1747,6 +1818,34 @@ func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (ima
 		}
 		return a.servicioMetadatos.GenerarPreviewImagen(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Orientacion)
 	}
+}
+
+func (a *Aplicacion) analizarArchivoLocalEnRuta(ctx context.Context, ruta string) (modelo.Archivo, error) {
+	info, err := os.Stat(ruta)
+	if err != nil {
+		return modelo.Archivo{}, fmt.Errorf("no se pudo leer el archivo recortado: %w", err)
+	}
+
+	archivo := modelo.Archivo{
+		Origen:       modelo.OrigenLocal,
+		Ruta:         ruta,
+		RutaPadre:    filepath.Dir(ruta),
+		Nombre:       filepath.Base(ruta),
+		Tamano:       info.Size(),
+		Modificado:   info.ModTime(),
+		Tipo:         modelo.TipoDesdeRuta(ruta, false),
+		EsOculto:     modelo.EsOcultoPorNombre(filepath.Base(ruta)),
+		EsDirectorio: false,
+	}
+	if a.servicioMetadatos == nil {
+		return archivo, nil
+	}
+
+	enriquecido, err := a.servicioMetadatos.AnalizarArchivo(ctx, archivo)
+	if err != nil {
+		return archivo, err
+	}
+	return enriquecido, nil
 }
 
 func rutaDerivada(origen, sufijo, extension string) string {

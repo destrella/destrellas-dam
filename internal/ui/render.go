@@ -1493,6 +1493,7 @@ func (a *Aplicacion) dibujarImagenConRegiones(gtx layout.Context, archivo modelo
 	tamano := image.Pt(maximo(1, int(float64(tamanoOriginal.X)*escala)), maximo(1, int(float64(tamanoOriginal.Y)*escala)))
 	radio := unit.Dp(12)
 	if interactiva {
+		a.actualizarInteraccionRecorte(gtx, archivo, tamano)
 		a.actualizarInteraccionRegiones(gtx, archivo, tamano)
 	}
 
@@ -1512,6 +1513,7 @@ func (a *Aplicacion) dibujarImagenConRegiones(gtx layout.Context, archivo modelo
 				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 					a.dibujarRegiones(gtx, archivo, tamano)
 					if interactiva {
+						a.dibujarSuperposicionRecorte(gtx, archivo, tamano)
 						a.dibujarSuperposicionEdicionRegiones(gtx, archivo, tamano)
 					}
 					return layout.Dimensions{Size: tamano}

@@ -285,6 +285,7 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 			}
 			a.archivoActivo = archivo
 			a.sincronizarEdicionRegiones(archivo)
+			a.sincronizarEdicionRecorte(archivo)
 			a.sincronizarEditoresMetadatos(archivo)
 			a.solicitarSalidaExiftool(archivo, true)
 			a.reemplazarArchivoEnMemoria(archivo)
@@ -844,6 +845,22 @@ func (a *Aplicacion) dibujarBloqueAccionesImagen(gtx layout.Context) layout.Dime
 }
 
 func (a *Aplicacion) dibujarBloqueRecorteImagen(gtx layout.Context) layout.Dimensions {
+	a.sincronizarEdicionRecorte(a.archivoActivo)
+
+	mensaje := "Activa la selección para dibujar un área de recorte o aceptar una sugerencia automática cuando detectemos bandas mate."
+	if a.edicionRecorte.Ruta == a.archivoActivo.Ruta {
+		switch {
+		case a.edicionRecorte.Guardando:
+			mensaje = "Recortando imagen..."
+		case a.edicionRecorte.Activo && a.edicionRecorte.TieneSeleccion && a.edicionRecorte.Sugerida:
+			mensaje = "Sugerencia automática aplicada. Puedes reajustarla arrastrando los bordes o las esquinas."
+		case a.edicionRecorte.Activo && a.edicionRecorte.TieneSeleccion:
+			mensaje = "Arrastra los bordes o las esquinas para refinar el área seleccionada."
+		case a.edicionRecorte.Activo:
+			mensaje = "Arrastra sobre la imagen para definir el área de recorte."
+		}
+	}
+
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -852,12 +869,60 @@ func (a *Aplicacion) dibujarBloqueRecorteImagen(gtx layout.Context) layout.Dimen
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarTextoSecundario(gtx, "Genera un recorte centrado junto al archivo original.")
+					return a.dibujarTextoSecundario(gtx, mensaje)
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					contexto := gtx
+					if a.edicionRecorte.Guardando {
+						contexto = contexto.Disabled()
+					}
+					return material.CheckBox(a.tema, &a.reemplazarOriginalRecorte, "Reemplazar archivo original").Layout(contexto)
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonAccion(gtx, &a.botonRecortar, "Recortar", a.paleta.Panel, a.paleta.Texto, func() {
-						a.recortarImagenActiva()
+					contexto := gtx
+					activo := a.edicionRecorte.Activo && a.edicionRecorte.Ruta == a.archivoActivo.Ruta
+					if a.edicionRecorte.Guardando {
+						contexto = contexto.Disabled()
+					}
+					fondoSeleccion := a.paleta.Panel
+					colorSeleccion := a.paleta.Texto
+					if activo {
+						fondoSeleccion = a.paleta.Acento
+						colorSeleccion = a.paleta.TextoSobreAcento
+					}
+					fondoRecorte := a.paleta.Panel
+					colorRecorte := a.paleta.Texto
+					if !a.edicionRecorte.Guardando && a.edicionRecorte.TieneSeleccion && a.edicionRecorte.Ruta == a.archivoActivo.Ruta {
+						fondoRecorte = a.paleta.Acento
+						colorRecorte = a.paleta.TextoSobreAcento
+					}
+
+					return layout.Flex{Alignment: layout.Middle}.Layout(contexto,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarBotonAccion(gtx, &a.botonSeleccionarRecorte, "Seleccionar región", fondoSeleccion, colorSeleccion, func() {
+								a.alternarSeleccionRecorte()
+							})
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarBotonAccion(gtx, &a.botonRecortar, "Recortar", fondoRecorte, colorRecorte, func() {
+								a.recortarImagenActiva()
+							})
+						}),
+					)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if a.edicionRecorte.Ruta != a.archivoActivo.Ruta || !a.edicionRecorte.TieneSeleccion {
+						return layout.Dimensions{}
+					}
+					dimensiones := a.descripcionDimensionesRecorte(a.archivoActivo, a.edicionRecorte.Seleccion)
+					if dimensiones == "" {
+						return layout.Dimensions{}
+					}
+					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarTextoSecundario(gtx, "Área actual: "+dimensiones)
 					})
 				}),
 			)
