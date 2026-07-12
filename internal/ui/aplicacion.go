@@ -117,6 +117,11 @@ type widgetsSelectorDirectorio struct {
 	Alternar    widget.Clickable
 }
 
+type estadoSelectorDirectorio struct {
+	Expandido bool
+	Alternar  widget.Clickable
+}
+
 type estadoPreview struct {
 	Imagen      image.Image
 	Cargando    bool
@@ -266,6 +271,10 @@ type Aplicacion struct {
 	botonDeseleccionarTodo widget.Clickable
 	editorFiltroEtiquetas  widget.Editor
 	editorFiltroLugares    widget.Editor
+	selectorActivoLocal    estadoSelectorDirectorio
+	selectorActivoRemoto   estadoSelectorDirectorio
+	selectorLoteLocal      estadoSelectorDirectorio
+	selectorLoteRemoto     estadoSelectorDirectorio
 
 	// Vistas principales.
 	listaLateral              widget.List
