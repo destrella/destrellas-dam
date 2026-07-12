@@ -74,6 +74,25 @@ func TestCampoCoincideSugerenciaRequiereSugerenciaActiva(t *testing.T) {
 	}
 }
 
+func TestFusionarOpcionesLateralesIncluyeExtrasSinDuplicados(t *testing.T) {
+	t.Parallel()
+
+	opciones := fusionarOpcionesLaterales(
+		[]string{"Familia", "Viaje", "Cancún"},
+		[]string{"Nueva etiqueta", "familia", "  Nuevo lugar  "},
+	)
+
+	esperadas := []string{"Nueva etiqueta", "Nuevo lugar", "Familia", "Viaje", "Cancún"}
+	if len(opciones) != len(esperadas) {
+		t.Fatalf("cantidad inesperada de opciones: %d", len(opciones))
+	}
+	for indice, esperada := range esperadas {
+		if opciones[indice].Clave != esperada || opciones[indice].Etiqueta != esperada {
+			t.Fatalf("opción %d inesperada: %+v", indice, opciones[indice])
+		}
+	}
+}
+
 func TestSincronizarEditoresMetadatosNoMarcaSugerenciasSiElArchivoYaTieneValores(t *testing.T) {
 	t.Parallel()
 

@@ -658,6 +658,18 @@ func (a *Aplicacion) dibujarControlesFiltros(gtx layout.Context) layout.Dimensio
 			})
 		},
 	}
+	controlesSeleccion := []layout.Widget{
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonAccion(gtx, &a.botonSeleccionarTodo, "Seleccionar todo", a.paleta.PanelElevado, a.paleta.Texto, func() {
+				a.seleccionarTodosElementosCargados()
+			})
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonAccion(gtx, &a.botonDeseleccionarTodo, "Deseleccionar todo", a.paleta.PanelElevado, a.paleta.Texto, func() {
+				a.deseleccionarTodosElementos()
+			})
+		},
+	}
 
 	dimensiones := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -670,6 +682,10 @@ func (a *Aplicacion) dibujarControlesFiltros(gtx layout.Context) layout.Dimensio
 		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarFlujoControles(gtx, controlesVista)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarFlujoControles(gtx, controlesSeleccion)
 		}),
 	)
 	a.alternarFiltrosDesdeUI()
@@ -732,8 +748,10 @@ func (a *Aplicacion) dibujarVistaYandex(gtx layout.Context) layout.Dimensions {
 
 func (a *Aplicacion) dibujarListaOpcionesLaterales(gtx layout.Context, titulo string, editorFiltro *widget.Editor, elementos []opcionFiltroLateral, origen tipoOrigenListado, alSeleccionar func(opcionFiltroLateral)) layout.Dimensions {
 	filtrados := elementos
+	buscando := false
+	consultaActiva := editorFiltro != nil && strings.TrimSpace(editorFiltro.Text()) != ""
 	if editorFiltro != nil {
-		filtrados = filtrarOpcionesLaterales(elementos, editorFiltro.Text())
+		filtrados, buscando = a.resolverOpcionesLaterales(editorFiltro, elementos, origen)
 	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -749,10 +767,13 @@ func (a *Aplicacion) dibujarListaOpcionesLaterales(gtx layout.Context, titulo st
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			if len(elementos) == 0 {
+			if !consultaActiva && len(elementos) == 0 {
 				return a.dibujarTextoSecundario(gtx, "Sin elementos indexados todavía.")
 			}
 			if len(filtrados) == 0 {
+				if buscando {
+					return a.dibujarTextoSecundario(gtx, "Buscando coincidencias...")
+				}
 				return a.dibujarTextoSecundario(gtx, "Sin coincidencias para el filtro actual.")
 			}
 			return a.dibujarListaConBarra(gtx, &a.listaLateral, len(filtrados), func(gtx layout.Context, indice int) layout.Dimensions {
@@ -775,18 +796,26 @@ func (a *Aplicacion) dibujarListaOpcionesLaterales(gtx layout.Context, titulo st
 }
 
 func filtrarOpcionesLaterales(elementos []opcionFiltroLateral, consulta string) []opcionFiltroLateral {
-	consulta = strings.TrimSpace(strings.ToLower(consulta))
-	if consulta == "" {
+	if strings.TrimSpace(consulta) == "" {
 		return elementos
 	}
 
 	filtrados := make([]opcionFiltroLateral, 0, len(elementos))
 	for _, elemento := range elementos {
-		if strings.Contains(strings.ToLower(elemento.Etiqueta), consulta) {
+		if coincideTextoBusqueda(elemento.Etiqueta, consulta) {
 			filtrados = append(filtrados, elemento)
 		}
 	}
 	return filtrados
+}
+
+func coincideTextoBusqueda(valor, consulta string) bool {
+	valor = strings.TrimSpace(strings.ToLower(valor))
+	consulta = strings.TrimSpace(strings.ToLower(consulta))
+	if consulta == "" {
+		return true
+	}
+	return strings.Contains(valor, consulta)
 }
 
 func (a *Aplicacion) dibujarBarraLote(gtx layout.Context) layout.Dimensions {
@@ -1045,7 +1074,8 @@ func (a *Aplicacion) dibujarFilaGaleriaConAncho(gtx layout.Context, elementos []
 
 func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Archivo) layout.Dimensions {
 	widgets := a.asegurarWidgetsElemento(archivo.Ruta)
-	widgets.Seleccion.Value = a.seleccionLote[archivo.Ruta]
+	seleccionadoAntes := a.seleccionLote[archivo.Ruta]
+	widgets.Seleccion.Value = seleccionadoAntes
 	clicks := 0
 	for {
 		click, ok := widgets.Fila.Update(gtx)
@@ -1087,12 +1117,11 @@ func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Arch
 			})
 		})
 	})
-	if widgets.Seleccion.Value {
-		a.seleccionLote[archivo.Ruta] = true
-	} else {
-		delete(a.seleccionLote, archivo.Ruta)
+	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	if cambioSeleccion && a.ventana != nil {
+		a.ventana.Invalidate()
 	}
-	if clicks > 0 {
+	if clicks > 0 && !cambioSeleccion {
 		a.manejarClickElementoExplorador(archivo, clicks)
 	}
 	return dim
@@ -1100,7 +1129,8 @@ func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Arch
 
 func (a *Aplicacion) dibujarTarjetaElemento(gtx layout.Context, archivo modelo.Archivo) layout.Dimensions {
 	widgets := a.asegurarWidgetsElemento(archivo.Ruta)
-	widgets.Seleccion.Value = a.seleccionLote[archivo.Ruta]
+	seleccionadoAntes := a.seleccionLote[archivo.Ruta]
+	widgets.Seleccion.Value = seleccionadoAntes
 	clicks := 0
 	for {
 		click, ok := widgets.Fila.Update(gtx)
@@ -1146,12 +1176,11 @@ func (a *Aplicacion) dibujarTarjetaElemento(gtx layout.Context, archivo modelo.A
 			})
 		})
 	})
-	if widgets.Seleccion.Value {
-		a.seleccionLote[archivo.Ruta] = true
-	} else {
-		delete(a.seleccionLote, archivo.Ruta)
+	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	if cambioSeleccion && a.ventana != nil {
+		a.ventana.Invalidate()
 	}
-	if clicks > 0 {
+	if clicks > 0 && !cambioSeleccion {
 		a.manejarClickElementoExplorador(archivo, clicks)
 	}
 	return dim

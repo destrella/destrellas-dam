@@ -289,7 +289,7 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 			a.sincronizarEditoresMetadatos(archivo)
 			a.solicitarSalidaExiftool(archivo, true)
 			a.reemplazarArchivoEnMemoria(archivo)
-			a.recargarColeccionesLaterales()
+			a.recargarColeccionesLateralesConExtras(palabras, []string{archivo.Metadatos.Ubicacion})
 		})
 	}()
 }

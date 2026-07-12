@@ -116,6 +116,13 @@ type estadoPreview struct {
 	Rotacion    int
 }
 
+type estadoBusquedaLateral struct {
+	Consulta string
+	Opciones []opcionFiltroLateral
+	Cargando bool
+	Version  int
+}
+
 // Aplicacion mantiene el estado inmediato de la UI.
 type Aplicacion struct {
 	tema   *material.Theme
@@ -151,6 +158,7 @@ type Aplicacion struct {
 	cargandoElementos   bool
 	hayMasElementos     bool
 	seleccionLote       map[string]bool
+	anclaSeleccionLote  string
 
 	archivoActivo      modelo.Archivo
 	tieneArchivoActivo bool
@@ -163,6 +171,8 @@ type Aplicacion struct {
 	ubicacionSeleccionada     string
 	usosUbicacionSeleccionada []modelo.UsoUbicacionGuardada
 	cargandoUsosUbicacion     bool
+	busquedaEtiquetas         estadoBusquedaLateral
+	busquedaUbicaciones       estadoBusquedaLateral
 
 	previews map[string]*estadoPreview
 
@@ -207,21 +217,23 @@ type Aplicacion struct {
 	botonPestanaYandex      widget.Clickable
 
 	// Filtros.
-	mostrarOcultos        widget.Bool
-	ocultarCarpetas       widget.Bool
-	soloMultimedia        widget.Bool
-	soloVideos            widget.Bool
-	soloImagenes          widget.Bool
-	soloAudio             widget.Bool
-	recursivo             widget.Bool
-	botonGaleria          widget.Clickable
-	botonLista            widget.Clickable
-	botonOrdenAZ          widget.Clickable
-	botonOrdenZA          widget.Clickable
-	botonOrdenAntiguos    widget.Clickable
-	botonOrdenNuevos      widget.Clickable
-	editorFiltroEtiquetas widget.Editor
-	editorFiltroLugares   widget.Editor
+	mostrarOcultos         widget.Bool
+	ocultarCarpetas        widget.Bool
+	soloMultimedia         widget.Bool
+	soloVideos             widget.Bool
+	soloImagenes           widget.Bool
+	soloAudio              widget.Bool
+	recursivo              widget.Bool
+	botonGaleria           widget.Clickable
+	botonLista             widget.Clickable
+	botonOrdenAZ           widget.Clickable
+	botonOrdenZA           widget.Clickable
+	botonOrdenAntiguos     widget.Clickable
+	botonOrdenNuevos       widget.Clickable
+	botonSeleccionarTodo   widget.Clickable
+	botonDeseleccionarTodo widget.Clickable
+	editorFiltroEtiquetas  widget.Editor
+	editorFiltroLugares    widget.Editor
 
 	// Vistas principales.
 	listaLateral           widget.List
@@ -750,6 +762,7 @@ func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, prese
 	a.offsetListado = 0
 	a.elementos = nil
 	a.seleccionLote = make(map[string]bool)
+	a.anclaSeleccionLote = ""
 	a.elementoWidgets = make(map[string]*widgetsElemento)
 	a.hayMasElementos = true
 	a.cargandoElementos = false
@@ -920,17 +933,24 @@ func (a *Aplicacion) cargarMasElementos() {
 }
 
 func (a *Aplicacion) recargarColeccionesLaterales() {
+	a.recargarColeccionesLateralesConExtras(nil, nil)
+}
+
+func (a *Aplicacion) recargarColeccionesLateralesConExtras(etiquetasExtra, ubicacionesExtra []string) {
+	a.invalidarBusquedasLaterales()
 	go func() {
-		etiquetas, errEtiquetas := a.almacen.ListarEtiquetas(context.Background(), 200)
-		ubicaciones, errUbicaciones := a.almacen.ListarUbicaciones(context.Background(), 200)
+		const limiteColeccionesLaterales = 1_000
+
+		etiquetas, errEtiquetas := a.almacen.ListarEtiquetas(context.Background(), limiteColeccionesLaterales)
+		ubicaciones, errUbicaciones := a.almacen.ListarUbicaciones(context.Background(), limiteColeccionesLaterales)
 		ubicacionesGuardadas, errUbicacionesGuardadas := a.almacen.ListarUbicacionesGuardadas(context.Background(), 1_000)
 		tieneSinNombre, errSinNombre := a.almacen.TieneArchivosConUbicacionSinNombre(context.Background())
 		a.encolarActualizacion(func() {
 			if errEtiquetas == nil {
-				a.etiquetas = convertirOpcionesLaterales(etiquetas)
+				a.etiquetas = fusionarOpcionesLaterales(etiquetas, etiquetasExtra)
 			}
 			if errUbicaciones == nil {
-				a.ubicacionesNombradas = convertirOpcionesLaterales(ubicaciones)
+				a.ubicacionesNombradas = fusionarOpcionesLaterales(ubicaciones, ubicacionesExtra)
 			}
 			if errUbicacionesGuardadas == nil {
 				a.actualizarUbicacionesGuardadasEnMemoria(ubicacionesGuardadas)
@@ -955,6 +975,141 @@ func (a *Aplicacion) recargarColeccionesLaterales() {
 			}
 		})
 	}()
+}
+
+func (a *Aplicacion) invalidarBusquedasLaterales() {
+	a.busquedaEtiquetas = estadoBusquedaLateral{}
+	a.busquedaUbicaciones = estadoBusquedaLateral{}
+}
+
+func (a *Aplicacion) resolverOpcionesLaterales(editorFiltro *widget.Editor, elementos []opcionFiltroLateral, origen tipoOrigenListado) ([]opcionFiltroLateral, bool) {
+	if editorFiltro == nil {
+		return elementos, false
+	}
+
+	consulta := strings.TrimSpace(editorFiltro.Text())
+	if consulta == "" {
+		a.limpiarBusquedaLateral(origen)
+		return elementos, false
+	}
+
+	filtradosLocales := filtrarOpcionesLaterales(elementos, consulta)
+	a.solicitarBusquedaLateral(origen, consulta)
+
+	estado := a.estadoBusquedaLateral(origen)
+	if estado == nil {
+		return filtradosLocales, false
+	}
+
+	if mismaConsultaBusquedaLateral(estado.Consulta, consulta) {
+		opciones := append([]opcionFiltroLateral(nil), estado.Opciones...)
+		if origen == origenListadoUbicacion {
+			opciones = anexarUbicacionSinNombreCoincidente(opciones, elementos, consulta)
+		}
+		if len(opciones) > 0 || !estado.Cargando {
+			return opciones, estado.Cargando
+		}
+	}
+
+	return filtradosLocales, true
+}
+
+func (a *Aplicacion) solicitarBusquedaLateral(origen tipoOrigenListado, consulta string) {
+	estado := a.estadoBusquedaLateral(origen)
+	if estado == nil || a.almacen == nil {
+		return
+	}
+
+	consulta = strings.TrimSpace(consulta)
+	if consulta == "" || mismaConsultaBusquedaLateral(estado.Consulta, consulta) {
+		return
+	}
+
+	estado.Consulta = consulta
+	estado.Opciones = nil
+	estado.Cargando = true
+	estado.Version++
+	versionActual := estado.Version
+
+	go func(consultaBusqueda string, versionBusqueda int) {
+		const limiteResultadosBusquedaLateral = 200
+
+		var (
+			valores []string
+			err     error
+		)
+		switch origen {
+		case origenListadoEtiqueta:
+			valores, err = a.almacen.BuscarEtiquetas(context.Background(), consultaBusqueda, limiteResultadosBusquedaLateral)
+		case origenListadoUbicacion:
+			valores, err = a.almacen.BuscarUbicaciones(context.Background(), consultaBusqueda, limiteResultadosBusquedaLateral)
+		default:
+			return
+		}
+
+		opciones := convertirOpcionesLaterales(valores)
+		a.encolarActualizacion(func() {
+			estadoActual := a.estadoBusquedaLateral(origen)
+			if estadoActual == nil || estadoActual.Version != versionBusqueda || !mismaConsultaBusquedaLateral(estadoActual.Consulta, consultaBusqueda) {
+				return
+			}
+			estadoActual.Cargando = false
+			if err != nil {
+				switch origen {
+				case origenListadoEtiqueta:
+					a.establecerEstado("No se pudieron buscar las etiquetas", err)
+				case origenListadoUbicacion:
+					a.establecerEstado("No se pudieron buscar las ubicaciones", err)
+				}
+				return
+			}
+			estadoActual.Opciones = opciones
+		})
+	}(consulta, versionActual)
+}
+
+func (a *Aplicacion) limpiarBusquedaLateral(origen tipoOrigenListado) {
+	estado := a.estadoBusquedaLateral(origen)
+	if estado == nil {
+		return
+	}
+	*estado = estadoBusquedaLateral{}
+}
+
+func (a *Aplicacion) estadoBusquedaLateral(origen tipoOrigenListado) *estadoBusquedaLateral {
+	switch origen {
+	case origenListadoEtiqueta:
+		return &a.busquedaEtiquetas
+	case origenListadoUbicacion, origenListadoUbicacionSinNombre:
+		return &a.busquedaUbicaciones
+	default:
+		return nil
+	}
+}
+
+func mismaConsultaBusquedaLateral(actual, esperada string) bool {
+	return strings.EqualFold(strings.TrimSpace(actual), strings.TrimSpace(esperada))
+}
+
+func anexarUbicacionSinNombreCoincidente(opciones, base []opcionFiltroLateral, consulta string) []opcionFiltroLateral {
+	if !coincideTextoBusqueda(etiquetaUbicacionSinNombre, consulta) || contieneOpcionLateral(opciones, etiquetaUbicacionSinNombre) {
+		return opciones
+	}
+	for _, opcion := range base {
+		if opcion.Clave == etiquetaUbicacionSinNombre {
+			return append(opciones, opcion)
+		}
+	}
+	return opciones
+}
+
+func contieneOpcionLateral(opciones []opcionFiltroLateral, clave string) bool {
+	for _, opcion := range opciones {
+		if strings.EqualFold(strings.TrimSpace(opcion.Clave), strings.TrimSpace(clave)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Aplicacion) recargarDuplicados() {
@@ -1587,6 +1742,116 @@ func (a *Aplicacion) prepararEstadoTrasAccionArchivo() {
 	a.limpiarReproductorVideo()
 }
 
+// La ancla de selección sólo vive mientras exista un único elemento seleccionado.
+// Eso permite construir rangos con primer/último elemento sin romper la selección libre.
+func (a *Aplicacion) actualizarAnclaSeleccionLote() {
+	if len(a.seleccionLote) != 1 {
+		a.anclaSeleccionLote = ""
+		return
+	}
+
+	for _, archivo := range a.elementos {
+		if a.seleccionLote[archivo.Ruta] {
+			a.anclaSeleccionLote = archivo.Ruta
+			return
+		}
+	}
+
+	for ruta := range a.seleccionLote {
+		a.anclaSeleccionLote = ruta
+		return
+	}
+	a.anclaSeleccionLote = ""
+}
+
+func (a *Aplicacion) indiceElementoPorRuta(ruta string) int {
+	for indice := range a.elementos {
+		if a.elementos[indice].Ruta == ruta {
+			return indice
+		}
+	}
+	return -1
+}
+
+func (a *Aplicacion) seleccionarRangoEntreRutas(inicioRuta, finRuta string) bool {
+	inicio := a.indiceElementoPorRuta(inicioRuta)
+	fin := a.indiceElementoPorRuta(finRuta)
+	if inicio < 0 || fin < 0 {
+		return false
+	}
+	if inicio > fin {
+		inicio, fin = fin, inicio
+	}
+	if a.seleccionLote == nil {
+		a.seleccionLote = make(map[string]bool)
+	}
+	for indice := inicio; indice <= fin; indice++ {
+		ruta := strings.TrimSpace(a.elementos[indice].Ruta)
+		if ruta == "" {
+			continue
+		}
+		a.seleccionLote[ruta] = true
+	}
+	return true
+}
+
+func (a *Aplicacion) seleccionarElementoConPosibleRango(ruta string) {
+	ruta = strings.TrimSpace(ruta)
+	if ruta == "" {
+		return
+	}
+	if a.seleccionLote == nil {
+		a.seleccionLote = make(map[string]bool)
+	}
+	if a.anclaSeleccionLote != "" && a.anclaSeleccionLote != ruta {
+		if a.seleccionarRangoEntreRutas(a.anclaSeleccionLote, ruta) {
+			a.actualizarAnclaSeleccionLote()
+			return
+		}
+	}
+	a.seleccionLote[ruta] = true
+	a.actualizarAnclaSeleccionLote()
+}
+
+func (a *Aplicacion) deseleccionarElemento(ruta string) {
+	if a.seleccionLote == nil {
+		return
+	}
+	delete(a.seleccionLote, strings.TrimSpace(ruta))
+	a.actualizarAnclaSeleccionLote()
+}
+
+func (a *Aplicacion) actualizarSeleccionElemento(ruta string, estabaSeleccionado, ahoraSeleccionado bool) bool {
+	if estabaSeleccionado == ahoraSeleccionado {
+		return false
+	}
+	if ahoraSeleccionado {
+		a.seleccionarElementoConPosibleRango(ruta)
+	} else {
+		a.deseleccionarElemento(ruta)
+	}
+	return true
+}
+
+func (a *Aplicacion) seleccionarTodosElementosCargados() {
+	if a.seleccionLote == nil {
+		a.seleccionLote = make(map[string]bool)
+	}
+	for _, archivo := range a.elementos {
+		ruta := strings.TrimSpace(archivo.Ruta)
+		if ruta == "" {
+			continue
+		}
+		a.seleccionLote[ruta] = true
+	}
+	a.actualizarAnclaSeleccionLote()
+}
+
+func (a *Aplicacion) deseleccionarTodosElementos() {
+	a.seleccionLote = make(map[string]bool)
+	a.anclaSeleccionLote = ""
+}
+
 func (a *Aplicacion) rutasSeleccionadas() []string {
 	rutas := make([]string, 0, len(a.seleccionLote))
 	for ruta, activa := range a.seleccionLote {
@@ -1686,6 +1951,7 @@ func (a *Aplicacion) procesarSeleccionLote(accion func(archivo modelo.Archivo) e
 
 		a.encolarActualizacion(func() {
 			a.seleccionLote = make(map[string]bool)
+			a.anclaSeleccionLote = ""
 			if primerError != nil {
 				a.establecerEstado(fmt.Sprintf("Acción por lotes con errores. %d elementos procesados", procesados), primerError)
 			} else {
@@ -2120,6 +2386,57 @@ func convertirOpcionesLaterales(valores []string) []opcionFiltroLateral {
 		if valor == "" {
 			continue
 		}
+		opciones = append(opciones, opcionFiltroLateral{
+			Clave:    valor,
+			Etiqueta: valor,
+		})
+	}
+	return opciones
+}
+
+func fusionarOpcionesLaterales(valores, extras []string) []opcionFiltroLateral {
+	vistosEnBase := make(map[string]struct{}, len(valores))
+	for _, valor := range valores {
+		valor = strings.TrimSpace(valor)
+		if valor == "" {
+			continue
+		}
+		clave := strings.ToLower(valor)
+		vistosEnBase[clave] = struct{}{}
+	}
+
+	opciones := make([]opcionFiltroLateral, 0, len(valores)+len(extras))
+	vistos := make(map[string]struct{}, len(valores)+len(extras))
+
+	for _, valor := range extras {
+		valor = strings.TrimSpace(valor)
+		if valor == "" {
+			continue
+		}
+		clave := strings.ToLower(valor)
+		if _, existe := vistosEnBase[clave]; existe {
+			continue
+		}
+		if _, existe := vistos[clave]; existe {
+			continue
+		}
+		vistos[clave] = struct{}{}
+		opciones = append(opciones, opcionFiltroLateral{
+			Clave:    valor,
+			Etiqueta: valor,
+		})
+	}
+
+	for _, valor := range valores {
+		valor = strings.TrimSpace(valor)
+		if valor == "" {
+			continue
+		}
+		clave := strings.ToLower(valor)
+		if _, existe := vistos[clave]; existe {
+			continue
+		}
+		vistos[clave] = struct{}{}
 		opciones = append(opciones, opcionFiltroLateral{
 			Clave:    valor,
 			Etiqueta: valor,
