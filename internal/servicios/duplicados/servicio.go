@@ -2,23 +2,31 @@ package duplicados
 
 import (
 	"context"
+	"path/filepath"
 
 	"destrellas-dam/internal/almacen"
+	"destrellas-dam/internal/configuracion"
 	"destrellas-dam/internal/modelo"
 	"destrellas-dam/internal/servicios/indexador"
 )
 
 // Servicio ofrece un punto de entrada claro para la vista de duplicados.
 type Servicio struct {
-	repo      almacen.Repositorio
-	indexador *indexador.Servicio
+	repo             almacen.Repositorio
+	indexador        *indexador.Servicio
+	rutaEstadoRemoto string
 }
 
 // NuevoServicio crea el servicio de duplicados.
 func NuevoServicio(repo almacen.Repositorio, idx *indexador.Servicio) *Servicio {
+	rutaEstadoRemoto := ""
+	if rutas, err := configuracion.ResolverRutas(); err == nil {
+		rutaEstadoRemoto = filepath.Join(rutas.DirectorioBase, "duplicados-remotos.json")
+	}
 	return &Servicio{
-		repo:      repo,
-		indexador: idx,
+		repo:             repo,
+		indexador:        idx,
+		rutaEstadoRemoto: rutaEstadoRemoto,
 	}
 }
 
@@ -32,16 +40,6 @@ func (s *Servicio) IniciarDescubrimientoLocal(ctx context.Context, raiz string, 
 		IgnorarArchivosVacios:   true,
 		RutasExcluidas:          append([]string(nil), rutasExcluidas...),
 	})
-}
-
-// IniciarDescubrimientoRemoto devuelve un evento final mientras la integracion remota se completa.
-func (s *Servicio) IniciarDescubrimientoRemoto(_ context.Context, _ string) <-chan indexador.EventoProgreso {
-	canales := make(chan indexador.EventoProgreso, 1)
-	canales <- indexador.EventoProgreso{
-		Finalizado: true,
-	}
-	close(canales)
-	return canales
 }
 
 // ListarGrupos consulta la base persistente.

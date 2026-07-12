@@ -219,6 +219,10 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 	if !a.tieneArchivoActivo {
 		return
 	}
+	if !archivoEsLocal(a.archivoActivo) {
+		a.establecerEstado("La edición de metadatos sólo está disponible para archivos locales", nil)
+		return
+	}
 
 	archivo := a.archivoActivo
 	fecha, hora, zona, err := normalizarFechaHoraEditada(a.editorFecha.Text(), a.editorHora.Text(), a.editorZonaHoraria.Text())
@@ -295,7 +299,7 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 }
 
 func (a *Aplicacion) solicitarSalidaExiftool(archivo modelo.Archivo, forzar bool) {
-	if !archivo.EsMultimedia() || strings.TrimSpace(archivo.Ruta) == "" || a.servicioMetadatos == nil {
+	if !archivoEsLocal(archivo) || !archivo.EsMultimedia() || strings.TrimSpace(archivo.Ruta) == "" || a.servicioMetadatos == nil {
 		a.formularioMetadatos.SalidaExiftoolRuta = ""
 		a.formularioMetadatos.SalidaExiftoolTexto = ""
 		a.formularioMetadatos.SalidaExiftoolCargando = false

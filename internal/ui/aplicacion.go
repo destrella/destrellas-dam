@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,6 +55,7 @@ type tipoOrigenListado string
 
 const (
 	origenListadoCarpeta            tipoOrigenListado = "carpeta"
+	origenListadoCarpetaYandex      tipoOrigenListado = "carpeta_yandex"
 	origenListadoEtiqueta           tipoOrigenListado = "etiqueta"
 	origenListadoUbicacion          tipoOrigenListado = "ubicacion"
 	origenListadoUbicacionSinNombre tipoOrigenListado = "ubicacion_sin_nombre"
@@ -78,6 +81,7 @@ type Dependencias struct {
 }
 
 type nodoArbolUI struct {
+	Origen      modelo.Origen
 	Ruta        string
 	Nombre      string
 	Expandido   bool
@@ -108,6 +112,11 @@ type widgetsGrupoDuplicado struct {
 	SeleccionarRuta  map[string]*widget.Clickable
 }
 
+type widgetsSelectorDirectorio struct {
+	Seleccionar widget.Clickable
+	Alternar    widget.Clickable
+}
+
 type estadoPreview struct {
 	Imagen      image.Image
 	Cargando    bool
@@ -115,6 +124,23 @@ type estadoPreview struct {
 	Orientacion int
 	Rotacion    int
 }
+
+type tipoSeleccionLote string
+
+const (
+	seleccionLoteVacia  tipoSeleccionLote = "vacia"
+	seleccionLoteLocal  tipoSeleccionLote = "local"
+	seleccionLoteYandex tipoSeleccionLote = "yandex"
+	seleccionLoteMixta  tipoSeleccionLote = "mixta"
+)
+
+type tipoDescubrimientoDuplicados string
+
+const (
+	descubrimientoDuplicadosNinguno tipoDescubrimientoDuplicados = "ninguno"
+	descubrimientoDuplicadosLocal   tipoDescubrimientoDuplicados = "local"
+	descubrimientoDuplicadosRemoto  tipoDescubrimientoDuplicados = "remoto"
+)
 
 type estadoBusquedaLateral struct {
 	Consulta string
@@ -163,7 +189,10 @@ type Aplicacion struct {
 	archivoActivo      modelo.Archivo
 	tieneArchivoActivo bool
 
-	raizArbol *nodoArbolUI
+	raizArbol       *nodoArbolUI
+	raizArbolYandex *nodoArbolUI
+
+	carpetaYandexSeleccionada string
 
 	etiquetas                 []opcionFiltroLateral
 	ubicacionesNombradas      []opcionFiltroLateral
@@ -194,6 +223,9 @@ type Aplicacion struct {
 	cancelarCargaDuplicados    context.CancelFunc
 	versionCargaDuplicados     int
 	cancelarDescubrimiento     context.CancelFunc
+	versionDescubrimiento      int
+	tipoDescubrimiento         tipoDescubrimientoDuplicados
+	escaneoRemotoPendiente     bool
 	progresoMetadatos          indexador.EventoProgreso
 	escanandoMetadatos         bool
 	cancelarEscaneoMetadatos   context.CancelFunc
@@ -236,30 +268,45 @@ type Aplicacion struct {
 	editorFiltroLugares    widget.Editor
 
 	// Vistas principales.
-	listaLateral           widget.List
-	listaCentro            widget.List
-	listaDetalle           widget.List
-	listaDuplicados        widget.List
-	listaUbicaciones       widget.List
-	listaUsosUbicacion     widget.List
-	listaRelacionUbicacion widget.List
-	listaConfiguracion     widget.List
-	listaNombreVisor       widget.List
+	listaLateral              widget.List
+	listaCentro               widget.List
+	listaDetalle              widget.List
+	listaDuplicados           widget.List
+	listaUbicaciones          widget.List
+	listaUsosUbicacion        widget.List
+	listaRelacionUbicacion    widget.List
+	listaConfiguracion        widget.List
+	listaNombreVisor          widget.List
+	listaSelectorActivoLocal  widget.List
+	listaSelectorActivoRemoto widget.List
+	listaSelectorLoteLocal    widget.List
+	listaSelectorLoteRemoto   widget.List
 
-	elementoWidgets map[string]*widgetsElemento
-	grupoWidgets    map[string]*widgetsGrupoDuplicado
-	widgetsLateral  map[string]*widget.Clickable
+	elementoWidgets             map[string]*widgetsElemento
+	grupoWidgets                map[string]*widgetsGrupoDuplicado
+	widgetsLateral              map[string]*widget.Clickable
+	widgetsSelectorActivoLocal  map[string]*widgetsSelectorDirectorio
+	widgetsSelectorActivoRemoto map[string]*widgetsSelectorDirectorio
+	widgetsSelectorLoteLocal    map[string]*widgetsSelectorDirectorio
+	widgetsSelectorLoteRemoto   map[string]*widgetsSelectorDirectorio
 
 	// Acciones generales y de lote.
-	editorDestinoMover    widget.Editor
-	editorDestinoLote     widget.Editor
-	botonMoverActivo      widget.Clickable
-	botonArchivarActivo   widget.Clickable
-	botonPapeleraActiva   widget.Clickable
-	botonGuardarMetadatos widget.Clickable
-	botonMoverLote        widget.Clickable
-	botonArchivarLote     widget.Clickable
-	botonPapeleraLote     widget.Clickable
+	editorDestinoMover      widget.Editor
+	editorDestinoLote       widget.Editor
+	rutaDestinoActivoLocal  string
+	rutaDestinoActivoRemoto string
+	rutaDestinoLoteLocal    string
+	rutaDestinoLoteRemoto   string
+	botonMoverActivo        widget.Clickable
+	botonArchivarActivo     widget.Clickable
+	botonPapeleraActiva     widget.Clickable
+	botonDescargarActivo    widget.Clickable
+	botonGuardarLocalActivo widget.Clickable
+	botonGuardarMetadatos   widget.Clickable
+	botonMoverLote          widget.Clickable
+	botonArchivarLote       widget.Clickable
+	botonPapeleraLote       widget.Clickable
+	botonDescargarLote      widget.Clickable
 
 	// Editores de metadatos.
 	editorFecha             widget.Editor
@@ -352,38 +399,42 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	rutaUsuario := resolverRutaUsuarioLocal(dependencias.Configuracion.CarpetaInicial)
 
 	appUI := &Aplicacion{
-		tema:                       tema,
-		paleta:                     paleta,
-		repoConfiguracion:          dependencias.RepositorioConfig,
-		configuracion:              dependencias.Configuracion,
-		almacen:                    dependencias.Almacen,
-		listador:                   dependencias.Listador,
-		indexador:                  dependencias.Indexador,
-		servicioMetadatos:          dependencias.Metadatos,
-		servicioArchivos:           dependencias.Archivos,
-		servicioDuplicados:         dependencias.Duplicados,
-		clienteYandex:              dependencias.Yandex,
-		rutaUsuario:                rutaUsuario,
-		rutaLibraryUsuario:         filepath.Join(rutaUsuario, "Library"),
-		vistaActual:                vistaPrincipal,
-		pestanaLateral:             pestanaDirectorios,
-		filtros:                    dependencias.Configuracion.FiltrosPorDefecto,
-		carpetaSeleccionada:        dependencias.Configuracion.CarpetaInicial,
-		origenListado:              origenListadoCarpeta,
-		claveListadoActual:         dependencias.Configuracion.CarpetaInicial,
-		hayMasElementos:            true,
-		seleccionLote:              make(map[string]bool),
-		previews:                   make(map[string]*estadoPreview),
-		metadatosPendientes:        make(map[string]bool),
-		metadatosVerificados:       make(map[string]int64),
-		tipoCoincidenciaActual:     modelo.CoincidenciaExacta,
-		categoriaDuplicados:        modelo.CategoriaDuplicadosLocales,
-		ordenDuplicados:            modelo.OrdenPorTamanoGrupo,
-		actualizaciones:            make(chan func(), 512),
-		elementoWidgets:            make(map[string]*widgetsElemento),
-		gruposDuplicadosContraidos: make(map[string]bool),
-		grupoWidgets:               make(map[string]*widgetsGrupoDuplicado),
-		widgetsLateral:             make(map[string]*widget.Clickable),
+		tema:                        tema,
+		paleta:                      paleta,
+		repoConfiguracion:           dependencias.RepositorioConfig,
+		configuracion:               dependencias.Configuracion,
+		almacen:                     dependencias.Almacen,
+		listador:                    dependencias.Listador,
+		indexador:                   dependencias.Indexador,
+		servicioMetadatos:           dependencias.Metadatos,
+		servicioArchivos:            dependencias.Archivos,
+		servicioDuplicados:          dependencias.Duplicados,
+		clienteYandex:               dependencias.Yandex,
+		rutaUsuario:                 rutaUsuario,
+		rutaLibraryUsuario:          filepath.Join(rutaUsuario, "Library"),
+		vistaActual:                 vistaPrincipal,
+		pestanaLateral:              pestanaDirectorios,
+		filtros:                     dependencias.Configuracion.FiltrosPorDefecto,
+		carpetaSeleccionada:         dependencias.Configuracion.CarpetaInicial,
+		origenListado:               origenListadoCarpeta,
+		claveListadoActual:          dependencias.Configuracion.CarpetaInicial,
+		hayMasElementos:             true,
+		seleccionLote:               make(map[string]bool),
+		previews:                    make(map[string]*estadoPreview),
+		metadatosPendientes:         make(map[string]bool),
+		metadatosVerificados:        make(map[string]int64),
+		tipoCoincidenciaActual:      modelo.CoincidenciaExacta,
+		categoriaDuplicados:         modelo.CategoriaDuplicadosLocales,
+		ordenDuplicados:             modelo.OrdenPorTamanoGrupo,
+		actualizaciones:             make(chan func(), 512),
+		elementoWidgets:             make(map[string]*widgetsElemento),
+		gruposDuplicadosContraidos:  make(map[string]bool),
+		grupoWidgets:                make(map[string]*widgetsGrupoDuplicado),
+		widgetsLateral:              make(map[string]*widget.Clickable),
+		widgetsSelectorActivoLocal:  make(map[string]*widgetsSelectorDirectorio),
+		widgetsSelectorActivoRemoto: make(map[string]*widgetsSelectorDirectorio),
+		widgetsSelectorLoteLocal:    make(map[string]*widgetsSelectorDirectorio),
+		widgetsSelectorLoteRemoto:   make(map[string]*widgetsSelectorDirectorio),
 	}
 
 	appUI.listaLateral.Axis = layout.Vertical
@@ -395,6 +446,10 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.listaRelacionUbicacion.Axis = layout.Vertical
 	appUI.listaConfiguracion.Axis = layout.Vertical
 	appUI.listaNombreVisor.Axis = layout.Horizontal
+	appUI.listaSelectorActivoLocal.Axis = layout.Vertical
+	appUI.listaSelectorActivoRemoto.Axis = layout.Vertical
+	appUI.listaSelectorLoteLocal.Axis = layout.Vertical
+	appUI.listaSelectorLoteRemoto.Axis = layout.Vertical
 
 	appUI.mostrarOcultos.Value = appUI.filtros.MostrarOcultos
 	appUI.ocultarCarpetas.Value = appUI.filtros.OcultarCarpetas
@@ -406,6 +461,10 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 
 	appUI.editorDestinoMover.SingleLine = true
 	appUI.editorDestinoLote.SingleLine = true
+	appUI.rutaDestinoActivoLocal = appUI.rutaUsuario
+	appUI.rutaDestinoLoteLocal = appUI.rutaUsuario
+	appUI.rutaDestinoActivoRemoto = "disk:/"
+	appUI.rutaDestinoLoteRemoto = "disk:/"
 	appUI.editorFecha.SingleLine = true
 	appUI.editorHora.SingleLine = true
 	appUI.editorZonaHoraria.SingleLine = true
@@ -438,6 +497,21 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorRutaEscaneoMetadatos.SetText(appUI.rutaUsuario)
 	appUI.editorRutaEscaneoDuplicados.SingleLine = true
 	appUI.editorRutaEscaneoDuplicados.SetText(appUI.rutaUsuario)
+
+	if appUI.servicioDuplicados != nil {
+		if estadoRemoto, err := appUI.servicioDuplicados.CargarEstadoDescubrimientoRemoto(); err == nil && estadoRemoto.Pendiente {
+			appUI.progresoDuplicados = indexador.EventoProgreso{
+				RutaActual:            estadoRemoto.RutaActual,
+				DirectoriosProcesados: estadoRemoto.DirectoriosProcesados,
+				ArchivosEncontrados:   estadoRemoto.ArchivosEncontrados,
+				ArchivosAnalizados:    estadoRemoto.ArchivosAnalizados,
+			}
+			appUI.escaneoRemotoPendiente = true
+			if strings.TrimSpace(estadoRemoto.RutaRaiz) != "" {
+				appUI.editorRutaEscaneoDuplicados.SetText(estadoRemoto.RutaRaiz)
+			}
+		}
+	}
 
 	appUI.configMostrarOcultos.Value = appUI.configuracion.FiltrosPorDefecto.MostrarOcultos
 	appUI.configOcultarCarpetas.Value = appUI.configuracion.FiltrosPorDefecto.OcultarCarpetas
@@ -588,6 +662,7 @@ func (a *Aplicacion) reconstruirArbol() {
 		nombre = a.configuracion.CarpetaInicial
 	}
 	a.raizArbol = &nodoArbolUI{
+		Origen:    modelo.OrigenLocal,
 		Ruta:      a.configuracion.CarpetaInicial,
 		Nombre:    nombre,
 		Expandido: true,
@@ -596,8 +671,104 @@ func (a *Aplicacion) reconstruirArbol() {
 	a.asegurarHijosNodo(a.raizArbol)
 }
 
-func (a *Aplicacion) aplanarArbol() []nodoVisible {
+func (a *Aplicacion) reconstruirArbolYandex() {
+	a.raizArbolYandex = &nodoArbolUI{
+		Origen:    modelo.OrigenYandex,
+		Ruta:      "disk:/",
+		Nombre:    "Yandex.Disk",
+		Expandido: true,
+		Cargado:   false,
+	}
+}
+
+func (a *Aplicacion) asegurarArbolYandex() {
+	if a.raizArbolYandex == nil {
+		a.reconstruirArbolYandex()
+	}
+	if a.raizArbolYandex != nil && !a.raizArbolYandex.Cargado && !a.raizArbolYandex.Cargando {
+		a.asegurarHijosNodo(a.raizArbolYandex)
+	}
+}
+
+func (a *Aplicacion) asegurarArbolLocal() {
 	if a.raizArbol == nil {
+		a.reconstruirArbol()
+	}
+}
+
+func claveSelectorDirectorio(origen modelo.Origen, ruta string) string {
+	return string(origen) + "::" + strings.TrimSpace(ruta)
+}
+
+func (a *Aplicacion) asegurarWidgetSelectorDirectorio(mapa map[string]*widgetsSelectorDirectorio, origen modelo.Origen, ruta string) *widgetsSelectorDirectorio {
+	if mapa == nil {
+		return &widgetsSelectorDirectorio{}
+	}
+	clave := claveSelectorDirectorio(origen, ruta)
+	if existente, ok := mapa[clave]; ok && existente != nil {
+		return existente
+	}
+	nuevo := &widgetsSelectorDirectorio{}
+	mapa[clave] = nuevo
+	return nuevo
+}
+
+func (a *Aplicacion) normalizarRutaLocalDestino(ruta string) string {
+	ruta = strings.TrimSpace(ruta)
+	if ruta == "" {
+		return a.rutaUsuario
+	}
+	return filepath.Clean(ruta)
+}
+
+func (a *Aplicacion) establecerRutaDestinoActivoLocal(ruta string) {
+	ruta = a.normalizarRutaLocalDestino(ruta)
+	a.rutaDestinoActivoLocal = ruta
+	a.editorDestinoMover.SetText(ruta)
+	a.asegurarArbolLocal()
+	if err := a.sincronizarArbolConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el selector de carpeta local", err)
+	}
+}
+
+func (a *Aplicacion) establecerRutaDestinoLoteLocal(ruta string) {
+	ruta = a.normalizarRutaLocalDestino(ruta)
+	a.rutaDestinoLoteLocal = ruta
+	a.editorDestinoLote.SetText(ruta)
+	a.asegurarArbolLocal()
+	if err := a.sincronizarArbolConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el selector de carpeta local", err)
+	}
+}
+
+func (a *Aplicacion) establecerRutaDestinoActivoRemoto(ruta string) {
+	ruta = normalizarRutaYandexUI(ruta)
+	a.rutaDestinoActivoRemoto = ruta
+	a.asegurarArbolYandex()
+	if err := a.sincronizarArbolYandexConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el selector remoto de Yandex.Disk", err)
+	}
+}
+
+func (a *Aplicacion) establecerRutaDestinoLoteRemoto(ruta string) {
+	ruta = normalizarRutaYandexUI(ruta)
+	a.rutaDestinoLoteRemoto = ruta
+	a.asegurarArbolYandex()
+	if err := a.sincronizarArbolYandexConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el selector remoto de Yandex.Disk", err)
+	}
+}
+
+func (a *Aplicacion) aplanarArbol() []nodoVisible {
+	return a.aplanarArbolDesdeRaiz(a.raizArbol)
+}
+
+func (a *Aplicacion) aplanarArbolYandex() []nodoVisible {
+	return a.aplanarArbolDesdeRaiz(a.raizArbolYandex)
+}
+
+func (a *Aplicacion) aplanarArbolDesdeRaiz(raiz *nodoArbolUI) []nodoVisible {
+	if raiz == nil {
 		return nil
 	}
 
@@ -612,12 +783,17 @@ func (a *Aplicacion) aplanarArbol() []nodoVisible {
 			recorrer(hijo, nivel+1)
 		}
 	}
-	recorrer(a.raizArbol, 0)
+	recorrer(raiz, 0)
 	return visibles
 }
 
 func (a *Aplicacion) asegurarHijosNodo(nodo *nodoArbolUI) {
 	if nodo == nil || nodo.Cargado || nodo.Cargando {
+		return
+	}
+
+	if nodo.Origen == modelo.OrigenYandex {
+		a.asegurarHijosNodoYandex(nodo)
 		return
 	}
 
@@ -641,6 +817,38 @@ func (a *Aplicacion) asegurarHijosNodo(nodo *nodoArbolUI) {
 	}()
 }
 
+func (a *Aplicacion) asegurarHijosNodoYandex(nodo *nodoArbolUI) {
+	if nodo == nil || nodo.Cargado || nodo.Cargando {
+		return
+	}
+
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		nodo.Cargado = true
+		nodo.Cargando = false
+		nodo.Hijos = nil
+		return
+	}
+
+	nodo.Cargando = true
+	ruta := nodo.Ruta
+	go func() {
+		subdirectorios, err := a.listarDirectoriosYandex(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			nodo.Cargando = false
+			if err != nil {
+				a.establecerEstado("No se pudieron cargar las carpetas remotas de Yandex.Disk", err)
+				return
+			}
+
+			a.fusionarHijosNodoYandex(nodo, subdirectorios)
+			sort.SliceStable(nodo.Hijos, func(i, j int) bool {
+				return compararTextoUI(nodo.Hijos[i].Nombre, nodo.Hijos[j].Nombre)
+			})
+			nodo.Cargado = true
+		})
+	}()
+}
+
 func (a *Aplicacion) seleccionarCarpeta(ruta string) {
 	if ruta == "" {
 		return
@@ -651,7 +859,21 @@ func (a *Aplicacion) seleccionarCarpeta(ruta string) {
 	a.carpetaSeleccionada = ruta
 	a.origenListado = origenListadoCarpeta
 	a.claveListadoActual = ruta
-	a.editorDestinoMover.SetText(filepath.Dir(ruta))
+	a.reiniciarListado()
+}
+
+func (a *Aplicacion) seleccionarCarpetaYandex(ruta string) {
+	ruta = normalizarRutaYandexUI(ruta)
+	if ruta == "" {
+		return
+	}
+	a.asegurarArbolYandex()
+	if err := a.sincronizarArbolYandexConRuta(ruta); err != nil {
+		a.establecerEstado("No se pudo sincronizar el árbol remoto de Yandex.Disk", err)
+	}
+	a.carpetaYandexSeleccionada = ruta
+	a.origenListado = origenListadoCarpetaYandex
+	a.claveListadoActual = ruta
 	a.reiniciarListado()
 }
 
@@ -689,6 +911,10 @@ func (a *Aplicacion) seleccionarNodoArbol(nodo *nodoArbolUI) {
 		a.asegurarHijosNodo(nodo)
 	}
 	nodo.Expandido = true
+	if nodo.Origen == modelo.OrigenYandex {
+		a.seleccionarCarpetaYandex(nodo.Ruta)
+		return
+	}
 	a.seleccionarCarpeta(nodo.Ruta)
 }
 
@@ -781,6 +1007,8 @@ func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, prese
 		a.establecerEstado(fmt.Sprintf("Cargando elementos en %q", a.claveListadoActual), nil)
 	case origenListadoUbicacionSinNombre:
 		a.establecerEstado("Cargando elementos con GPS y sin valor Location", nil)
+	case origenListadoCarpetaYandex:
+		a.establecerEstado("Cargando elementos remotos de Yandex.Disk", nil)
 	default:
 		sesion, err := a.listador.NuevaSesion(context.Background(), a.carpetaSeleccionada, a.filtros)
 		if err != nil {
@@ -800,7 +1028,12 @@ func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, prese
 func (a *Aplicacion) calcularObjetivoRestauracionListado(posicion layout.Position) int {
 	objetivo := len(a.elementos)
 	pagina := a.configuracion.TamanoPaginaLocal
-	if pagina < 32 {
+	if a.origenListado == origenListadoCarpetaYandex {
+		pagina = a.configuracion.TamanoPaginaRemota
+		if pagina < 20 {
+			pagina = 40
+		}
+	} else if pagina < 32 {
 		pagina = 64
 	}
 	minimoVisible := posicion.First + pagina
@@ -836,7 +1069,12 @@ func (a *Aplicacion) cargarMasElementos() {
 	claveActual := a.claveListadoActual
 	offsetActual := a.offsetListado
 	limite := a.configuracion.TamanoPaginaLocal
-	if limite < 32 {
+	if origenActual == origenListadoCarpetaYandex {
+		limite = a.configuracion.TamanoPaginaRemota
+		if limite < 20 {
+			limite = 40
+		}
+	} else if limite < 32 {
 		limite = 64
 	}
 
@@ -878,6 +1116,43 @@ func (a *Aplicacion) cargarMasElementos() {
 					return
 				}
 				a.establecerEstado(fmt.Sprintf("%d elementos visibles en memoria inmediata", len(a.elementos)), nil)
+			})
+		}()
+		return
+	}
+
+	if origenActual == origenListadoCarpetaYandex {
+		go func() {
+			lote, siguienteOffset, fin, err := a.listarElementosYandex(context.Background(), claveActual, a.filtros, limite, offsetActual)
+			a.encolarActualizacion(func() {
+				if versionActual != a.versionListado || origenActual != a.origenListado || claveActual != a.claveListadoActual {
+					return
+				}
+
+				a.cargandoElementos = false
+				if err != nil {
+					a.hayMasElementos = false
+					a.objetivoListado = 0
+					a.establecerEstado("No se pudo continuar el listado remoto de Yandex.Disk", err)
+					return
+				}
+
+				for _, elemento := range lote {
+					a.elementos = append(a.elementos, elemento)
+					if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
+						a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
+					}
+				}
+				a.offsetListado = siguienteOffset
+				a.hayMasElementos = !fin
+				a.continuarRestauracionListadoSiHaceFalta()
+
+				if len(a.elementos) == 0 && fin {
+					a.objetivoListado = 0
+					a.establecerEstado("La carpeta remota no contiene elementos compatibles con los filtros activos", nil)
+					return
+				}
+				a.establecerEstado(fmt.Sprintf("%d elementos remotos visibles en memoria inmediata", len(a.elementos)), nil)
 			})
 		}()
 		return
@@ -930,6 +1205,101 @@ func (a *Aplicacion) cargarMasElementos() {
 			a.establecerEstado(fmt.Sprintf("%d elementos visibles en memoria inmediata", len(a.elementos)), nil)
 		})
 	}()
+}
+
+func (a *Aplicacion) listarDirectoriosYandex(ctx context.Context, ruta string) ([]yandex.ElementoRemoto, error) {
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		return nil, yandex.ErrNoImplementado
+	}
+
+	const tamanoLote = 200
+	var (
+		offset int
+		todos  []yandex.ElementoRemoto
+	)
+	for {
+		lote, err := a.clienteYandex.ListarDirectorios(ctx, ruta, tamanoLote, offset)
+		if err != nil {
+			return nil, err
+		}
+		todos = append(todos, lote...)
+		if len(lote) < tamanoLote {
+			break
+		}
+		offset += len(lote)
+	}
+	return todos, nil
+}
+
+func (a *Aplicacion) listarElementosYandex(ctx context.Context, ruta string, filtros modelo.FiltrosListado, limite, desplazamiento int) ([]modelo.Archivo, int, bool, error) {
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		return nil, desplazamiento, true, yandex.ErrNoImplementado
+	}
+
+	if limite < 1 {
+		limite = maximo(20, a.configuracion.TamanoPaginaRemota)
+	}
+	tamanoPeticion := a.configuracion.TamanoPaginaRemota
+	if tamanoPeticion < 20 {
+		tamanoPeticion = 40
+	}
+	if tamanoPeticion < limite {
+		tamanoPeticion = limite
+	}
+	if tamanoPeticion > 200 {
+		tamanoPeticion = 200
+	}
+
+	offsetActual := desplazamiento
+	resultados := make([]modelo.Archivo, 0, limite)
+	for len(resultados) < limite {
+		loteRemoto, err := a.clienteYandex.ListarElementos(ctx, ruta, tamanoPeticion, offsetActual)
+		if err != nil {
+			return nil, offsetActual, true, err
+		}
+		if len(loteRemoto) == 0 {
+			a.persistirArchivosRemotosDescubiertos(ctx, resultados)
+			return resultados, offsetActual, true, nil
+		}
+		offsetActual += len(loteRemoto)
+
+		for _, elemento := range loteRemoto {
+			archivo := convertirElementoYandexAArchivo(elemento)
+			if !filtros.Acepta(archivo) {
+				continue
+			}
+			resultados = append(resultados, archivo)
+			if len(resultados) >= limite {
+				break
+			}
+		}
+
+		if len(loteRemoto) < tamanoPeticion {
+			a.persistirArchivosRemotosDescubiertos(ctx, resultados)
+			return resultados, offsetActual, true, nil
+		}
+	}
+
+	a.persistirArchivosRemotosDescubiertos(ctx, resultados)
+	return resultados, offsetActual, false, nil
+}
+
+func (a *Aplicacion) persistirArchivosRemotosDescubiertos(ctx context.Context, archivos []modelo.Archivo) {
+	if len(archivos) == 0 {
+		return
+	}
+	for _, archivo := range archivos {
+		if !archivoEsRemotoYandex(archivo) || archivo.EsDirectorio || strings.TrimSpace(archivo.Ruta) == "" {
+			continue
+		}
+		if a.servicioDuplicados != nil {
+			_ = a.servicioDuplicados.GuardarArchivoRemotoDescubierto(ctx, archivo)
+			continue
+		}
+		if a.almacen != nil {
+			_ = a.almacen.GuardarArchivo(ctx, archivo)
+		}
+	}
 }
 
 func (a *Aplicacion) recargarColeccionesLaterales() {
@@ -1316,6 +1686,66 @@ func (a *Aplicacion) pausarEscaneoMetadatos() {
 	a.establecerEstado("Solicitando pausa del escaneo de metadatos", nil)
 }
 
+func (a *Aplicacion) escaneoRemotoActivo() bool {
+	return a.cancelarDescubrimiento != nil && a.tipoDescubrimiento == descubrimientoDuplicadosRemoto
+}
+
+func (a *Aplicacion) etiquetaBotonEscaneoRemoto() string {
+	switch {
+	case a.escaneoRemotoActivo():
+		return "Pausar escaneo remoto"
+	case a.escaneoRemotoPendiente:
+		return "Reanudar escaneo remoto"
+	default:
+		return "Escanear remotos"
+	}
+}
+
+func (a *Aplicacion) refrescarEstadoEscaneoRemotoPendiente() {
+	a.escaneoRemotoPendiente = false
+	if a.servicioDuplicados == nil {
+		return
+	}
+	estadoRemoto, err := a.servicioDuplicados.CargarEstadoDescubrimientoRemoto()
+	if err == nil && estadoRemoto.Pendiente {
+		a.escaneoRemotoPendiente = true
+	}
+}
+
+func (a *Aplicacion) pausarDescubrimientoRemoto() {
+	if !a.escaneoRemotoActivo() || a.cancelarDescubrimiento == nil {
+		return
+	}
+	a.cancelarDescubrimiento()
+	a.establecerEstado("Solicitando pausa del escaneo remoto", nil)
+}
+
+func (a *Aplicacion) resolverRutaEscaneoRemoto(valor string) string {
+	valor = strings.TrimSpace(valor)
+	if valor == "" {
+		if a.escaneoRemotoPendiente && a.servicioDuplicados != nil {
+			if estadoRemoto, err := a.servicioDuplicados.CargarEstadoDescubrimientoRemoto(); err == nil && strings.TrimSpace(estadoRemoto.RutaRaiz) != "" {
+				return estadoRemoto.RutaRaiz
+			}
+		}
+		if strings.TrimSpace(a.carpetaYandexSeleccionada) != "" {
+			return normalizarRutaYandexUI(a.carpetaYandexSeleccionada)
+		}
+		return "disk:/"
+	}
+
+	if strings.HasPrefix(strings.ToLower(valor), "disk:") {
+		return normalizarRutaYandexUI(valor)
+	}
+	if info, err := os.Stat(valor); err == nil && info.IsDir() {
+		if strings.TrimSpace(a.carpetaYandexSeleccionada) != "" {
+			return normalizarRutaYandexUI(a.carpetaYandexSeleccionada)
+		}
+		return "disk:/"
+	}
+	return normalizarRutaYandexUI(valor)
+}
+
 func (a *Aplicacion) iniciarDescubrimientoLocal() {
 	if a.cancelarDescubrimiento != nil {
 		a.cancelarDescubrimiento()
@@ -1329,6 +1759,10 @@ func (a *Aplicacion) iniciarDescubrimientoLocal() {
 
 	ctx, cancelar := context.WithCancel(context.Background())
 	a.cancelarDescubrimiento = cancelar
+	a.versionDescubrimiento++
+	versionActual := a.versionDescubrimiento
+	a.tipoDescubrimiento = descubrimientoDuplicadosLocal
+	a.refrescarEstadoEscaneoRemotoPendiente()
 	a.progresoDuplicados = indexador.EventoProgreso{}
 	a.establecerEstado("Iniciando descubrimiento local para hashes y duplicados", nil)
 
@@ -1337,11 +1771,21 @@ func (a *Aplicacion) iniciarDescubrimientoLocal() {
 		for evento := range flujo {
 			eventoActual := evento
 			a.encolarActualizacion(func() {
+				if versionActual != a.versionDescubrimiento || a.tipoDescubrimiento != descubrimientoDuplicadosLocal {
+					return
+				}
 				if eventoActual.Error != nil {
 					a.establecerEstado("Descubrimiento local con incidencias", eventoActual.Error)
 				}
 				a.progresoDuplicados = eventoActual
 				if eventoActual.Finalizado {
+					a.cancelarDescubrimiento = nil
+					a.tipoDescubrimiento = descubrimientoDuplicadosNinguno
+					a.refrescarEstadoEscaneoRemotoPendiente()
+					if eventoActual.Error != nil && errors.Is(eventoActual.Error, context.Canceled) {
+						a.establecerEstado("Descubrimiento local cancelado", nil)
+						return
+					}
 					a.establecerEstado(fmt.Sprintf("Descubrimiento finalizado. %d archivos analizados", eventoActual.ArchivosAnalizados), nil)
 					a.recargarColeccionesLaterales()
 					a.recargarDuplicados()
@@ -1351,8 +1795,87 @@ func (a *Aplicacion) iniciarDescubrimientoLocal() {
 	}()
 }
 
+func (a *Aplicacion) iniciarDescubrimientoRemoto() {
+	if a.servicioDuplicados == nil {
+		a.establecerEstado("No hay un servicio de duplicados disponible para el escaneo remoto", nil)
+		return
+	}
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		a.establecerEstado("Configura una clave API de Yandex.Disk para escanear remotos", yandex.ErrNoImplementado)
+		return
+	}
+	if a.escaneoRemotoActivo() {
+		a.pausarDescubrimientoRemoto()
+		return
+	}
+	if a.cancelarDescubrimiento != nil {
+		a.cancelarDescubrimiento()
+	}
+
+	rutaEscaneo := a.resolverRutaEscaneoRemoto(a.editorRutaEscaneoDuplicados.Text())
+	a.editorRutaEscaneoDuplicados.SetText(rutaEscaneo)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	a.cancelarDescubrimiento = cancelar
+	a.versionDescubrimiento++
+	versionActual := a.versionDescubrimiento
+	a.tipoDescubrimiento = descubrimientoDuplicadosRemoto
+
+	if estadoRemoto, err := a.servicioDuplicados.CargarEstadoDescubrimientoRemoto(); err == nil &&
+		estadoRemoto.Pendiente &&
+		strings.EqualFold(strings.TrimSpace(estadoRemoto.RutaRaiz), strings.TrimSpace(rutaEscaneo)) {
+		a.progresoDuplicados = indexador.EventoProgreso{
+			RutaActual:            estadoRemoto.RutaActual,
+			DirectoriosProcesados: estadoRemoto.DirectoriosProcesados,
+			ArchivosEncontrados:   estadoRemoto.ArchivosEncontrados,
+			ArchivosAnalizados:    estadoRemoto.ArchivosAnalizados,
+		}
+		a.escaneoRemotoPendiente = true
+		a.establecerEstado("Reanudando descubrimiento remoto para hashes y duplicados", nil)
+	} else {
+		a.progresoDuplicados = indexador.EventoProgreso{}
+		a.escaneoRemotoPendiente = false
+		a.establecerEstado("Iniciando descubrimiento remoto para hashes y duplicados", nil)
+	}
+
+	flujo := a.servicioDuplicados.IniciarDescubrimientoRemoto(ctx, rutaEscaneo, a.clienteYandex)
+	go func() {
+		for evento := range flujo {
+			eventoActual := evento
+			a.encolarActualizacion(func() {
+				if versionActual != a.versionDescubrimiento || a.tipoDescubrimiento != descubrimientoDuplicadosRemoto {
+					return
+				}
+				a.progresoDuplicados = eventoActual
+				if eventoActual.Error != nil && !errors.Is(eventoActual.Error, context.Canceled) {
+					a.establecerEstado("Descubrimiento remoto con incidencias", eventoActual.Error)
+				}
+				if !eventoActual.Finalizado {
+					return
+				}
+
+				a.cancelarDescubrimiento = nil
+				a.tipoDescubrimiento = descubrimientoDuplicadosNinguno
+				if eventoActual.Error != nil && errors.Is(eventoActual.Error, context.Canceled) {
+					a.escaneoRemotoPendiente = true
+					a.establecerEstado("Escaneo remoto en pausa. Puedes reanudarlo más tarde.", nil)
+					return
+				}
+
+				a.escaneoRemotoPendiente = false
+				if eventoActual.Error != nil {
+					a.establecerEstado("Descubrimiento remoto finalizado con incidencias", eventoActual.Error)
+				} else {
+					a.establecerEstado(fmt.Sprintf("Descubrimiento remoto finalizado. %d archivos analizados", eventoActual.ArchivosAnalizados), nil)
+				}
+				a.recargarDuplicados()
+			})
+		}
+	}()
+}
+
 func (a *Aplicacion) refrescarArchivoActivoDesdeCatalogo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" || !archivoEsLocal(a.archivoActivo) {
 		return
 	}
 
@@ -1372,21 +1895,32 @@ func (a *Aplicacion) refrescarArchivoActivoDesdeCatalogo() {
 func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 	a.archivoActivo = archivo
 	a.tieneArchivoActivo = true
-	a.sincronizarEdicionRegiones(archivo)
-	a.sincronizarEdicionRecorte(archivo)
-	a.sincronizarEditoresMetadatos(archivo)
-	a.solicitarSalidaExiftool(archivo, false)
-	a.editorDestinoMover.SetText(filepath.Dir(archivo.Ruta))
-	a.sincronizarReproductorVideo(archivo)
-	a.solicitarEnriquecimientoExplorador(archivo)
+	if archivoEsLocal(archivo) {
+		a.sincronizarEdicionRegiones(archivo)
+		a.sincronizarEdicionRecorte(archivo)
+		a.sincronizarEditoresMetadatos(archivo)
+		a.solicitarSalidaExiftool(archivo, false)
+		a.establecerRutaDestinoActivoLocal(filepath.Dir(archivo.Ruta))
+		a.sincronizarReproductorVideo(archivo)
+		a.solicitarEnriquecimientoExplorador(archivo)
 
+		if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+			a.solicitarPreview(archivo, 2_048)
+		}
+		return
+	}
+	a.descartarEdicionRegiones()
+	a.descartarEdicionRecorte()
+	a.limpiarReproductorVideo()
+	a.establecerRutaDestinoActivoLocal(a.rutaUsuario)
+	a.establecerRutaDestinoActivoRemoto(rutaPadreYandex(archivo.Ruta))
 	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
 		a.solicitarPreview(archivo, 2_048)
 	}
 }
 
 func (a *Aplicacion) archivoNecesitaEnriquecimiento(archivo modelo.Archivo) bool {
-	if !archivo.EsMultimedia() || archivo.EsDirectorio {
+	if !archivoEsLocal(archivo) || !archivo.EsMultimedia() || archivo.EsDirectorio {
 		return false
 	}
 	return archivo.Metadatos.MetadatosVacios() ||
@@ -1403,7 +1937,7 @@ func (a *Aplicacion) revisionArchivoSistema(archivo modelo.Archivo) int64 {
 }
 
 func (a *Aplicacion) archivoDebeVerificarseConSistema(archivo modelo.Archivo) bool {
-	if !archivo.EsMultimedia() || archivo.EsDirectorio || strings.TrimSpace(archivo.Ruta) == "" {
+	if !archivoEsLocal(archivo) || !archivo.EsMultimedia() || archivo.EsDirectorio || strings.TrimSpace(archivo.Ruta) == "" {
 		return false
 	}
 	if a.metadatosPendientes[archivo.Ruta] {
@@ -1429,6 +1963,10 @@ func (a *Aplicacion) esElementoActivo(archivo modelo.Archivo) bool {
 func (a *Aplicacion) manejarActivacionElemento(archivo modelo.Archivo, abrirVista bool) {
 	a.activarArchivo(archivo)
 	if archivo.EsDirectorio {
+		if archivoEsRemotoYandex(archivo) {
+			a.seleccionarCarpetaYandex(archivo.Ruta)
+			return
+		}
 		a.seleccionarCarpeta(archivo.Ruta)
 		return
 	}
@@ -1475,6 +2013,9 @@ func (a *Aplicacion) navegarVisor(desplazamiento int) {
 }
 
 func (a *Aplicacion) enriquecerArchivoActiva(archivo modelo.Archivo) {
+	if !archivoEsLocal(archivo) {
+		return
+	}
 	go func() {
 		enriquecido, err := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
 		a.encolarActualizacion(func() {
@@ -1498,7 +2039,7 @@ func (a *Aplicacion) enriquecerArchivoActiva(archivo modelo.Archivo) {
 }
 
 func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) {
-	if archivo.Ruta == "" || !a.archivoDebeVerificarseConSistema(archivo) {
+	if !archivoEsLocal(archivo) || archivo.Ruta == "" || !a.archivoDebeVerificarseConSistema(archivo) {
 		return
 	}
 	if a.metadatosPendientes[archivo.Ruta] {
@@ -1546,7 +2087,7 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 	if archivo.Ruta == "" {
 		return
 	}
-	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+	if archivoEsLocal(archivo) && (archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo) {
 		a.solicitarEnriquecimientoExplorador(archivo)
 	}
 
@@ -1624,13 +2165,26 @@ func rotacionPreviewArchivo(archivo modelo.Archivo) int {
 	return modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
 }
 
+func (a *Aplicacion) validarCarpetaDestinoLocal(ruta string) (string, error) {
+	ruta = a.normalizarRutaLocalDestino(ruta)
+	info, err := os.Stat(ruta)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s no es una carpeta", ruta)
+	}
+	return ruta, nil
+}
+
 func (a *Aplicacion) moverArchivoActivo() {
-	if !a.tieneArchivoActivo {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) {
 		return
 	}
-	destinoDir := strings.TrimSpace(a.editorDestinoMover.Text())
-	if destinoDir == "" {
-		a.establecerEstado("Indica una carpeta destino para mover el archivo activo", nil)
+
+	destinoDir, err := a.validarCarpetaDestinoLocal(a.rutaDestinoActivoLocal)
+	if err != nil {
+		a.establecerEstado("Selecciona una carpeta local válida para mover el archivo activo", err)
 		return
 	}
 
@@ -1665,7 +2219,7 @@ func (a *Aplicacion) moverArchivoActivo() {
 }
 
 func (a *Aplicacion) archivarArchivoActivo() {
-	if !a.tieneArchivoActivo {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) {
 		return
 	}
 
@@ -1703,7 +2257,7 @@ func (a *Aplicacion) archivarArchivoActivo() {
 }
 
 func (a *Aplicacion) enviarArchivoActivoAPapelera() {
-	if !a.tieneArchivoActivo {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) {
 		return
 	}
 
@@ -1724,6 +2278,122 @@ func (a *Aplicacion) enviarArchivoActivoAPapelera() {
 			a.refrescarExploradorTrasAccionArchivo()
 		})
 	}()
+}
+
+func (a *Aplicacion) guardarArchivoRemotoActivo() {
+	if !a.tieneArchivoActivo || !archivoEsRemotoYandex(a.archivoActivo) || a.archivoActivo.EsDirectorio {
+		return
+	}
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		a.establecerEstado("No hay una conexión de Yandex.Disk disponible para descargar el archivo remoto", yandex.ErrNoImplementado)
+		return
+	}
+
+	destinoDir, err := a.validarCarpetaDestinoLocal(a.rutaDestinoActivoLocal)
+	if err != nil {
+		a.establecerEstado("Selecciona una carpeta local válida para descargar el archivo remoto", err)
+		return
+	}
+
+	archivo := a.archivoActivo
+	go func() {
+		destinoGuardado, err := a.descargarArchivoRemotoEnCarpeta(context.Background(), archivo, destinoDir)
+		if err != nil {
+			a.encolarActualizacion(func() {
+				a.establecerEstado("No se pudo descargar el archivo remoto de Yandex.Disk", err)
+			})
+			return
+		}
+
+		archivoLocal, errAnalisis := a.analizarArchivoLocalEnRuta(context.Background(), destinoGuardado)
+		if errAnalisis == nil {
+			if errGuardar := a.almacen.GuardarArchivo(context.Background(), archivoLocal); errGuardar != nil {
+				errAnalisis = errGuardar
+			}
+		}
+
+		a.encolarActualizacion(func() {
+			if errAnalisis != nil {
+				a.establecerEstado("Archivo remoto descargado con incidencias al integrarlo en el catálogo local", errAnalisis)
+			} else {
+				a.establecerEstado("Archivo remoto descargado localmente", nil)
+			}
+			a.reiniciarListadoPreservandoPosicion()
+			a.recargarColeccionesLaterales()
+		})
+	}()
+}
+
+func (a *Aplicacion) moverArchivoRemotoActivo() {
+	if !a.tieneArchivoActivo || !archivoEsRemotoYandex(a.archivoActivo) {
+		return
+	}
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		a.establecerEstado("No hay una conexión de Yandex.Disk disponible para mover el elemento remoto", yandex.ErrNoImplementado)
+		return
+	}
+
+	destinoBase := normalizarRutaYandexUI(a.rutaDestinoActivoRemoto)
+	if destinoBase == "" {
+		destinoBase = "disk:/"
+	}
+
+	archivo := a.archivoActivo
+	destino := normalizarRutaYandexUI(destinoBase + "/" + archivo.NombreVisible())
+	if destino == normalizarRutaYandexUI(archivo.Ruta) {
+		a.establecerEstado("Selecciona una carpeta remota distinta para mover el elemento", nil)
+		return
+	}
+
+	go func() {
+		err := a.clienteYandex.Mover(context.Background(), archivo.Ruta, destino)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo mover el elemento remoto", err)
+				return
+			}
+			a.establecerEstado("Elemento remoto movido correctamente", nil)
+			a.refrescarExploradorTrasAccionArchivo()
+		})
+	}()
+}
+
+func (a *Aplicacion) enviarArchivoRemotoActivoAPapelera() {
+	if !a.tieneArchivoActivo || !archivoEsRemotoYandex(a.archivoActivo) {
+		return
+	}
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		a.establecerEstado("No hay una conexión de Yandex.Disk disponible para mover el elemento remoto a la papelera", yandex.ErrNoImplementado)
+		return
+	}
+
+	ruta := a.archivoActivo.Ruta
+	go func() {
+		err := a.clienteYandex.EnviarAPapelera(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			if err != nil {
+				a.establecerEstado("No se pudo mover el elemento remoto a la papelera", err)
+				return
+			}
+			a.establecerEstado("Elemento remoto enviado a la papelera", nil)
+			a.refrescarExploradorTrasAccionArchivo()
+		})
+	}()
+}
+
+func (a *Aplicacion) descargarArchivoRemotoEnCarpeta(ctx context.Context, archivo modelo.Archivo, destinoDir string) (string, error) {
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		return "", yandex.ErrNoImplementado
+	}
+
+	lector, err := a.clienteYandex.Descargar(ctx, archivo.Ruta)
+	if err != nil {
+		return "", err
+	}
+	defer lector.Close()
+
+	destino := filepath.Join(destinoDir, archivo.NombreVisible())
+	return a.servicioArchivos.GuardarContenidoLocalDisponible(destino, lector)
 }
 
 func (a *Aplicacion) refrescarExploradorTrasAccionArchivo() {
@@ -1852,6 +2522,47 @@ func (a *Aplicacion) deseleccionarTodosElementos() {
 	a.anclaSeleccionLote = ""
 }
 
+func (a *Aplicacion) seleccionLoteAdmiteAccionesLocales() bool {
+	return a.tipoSeleccionLote() == seleccionLoteLocal
+}
+
+func (a *Aplicacion) seleccionLoteAdmiteAccionesYandex() bool {
+	return a.tipoSeleccionLote() == seleccionLoteYandex
+}
+
+func (a *Aplicacion) tipoSeleccionLote() tipoSeleccionLote {
+	rutas := a.rutasSeleccionadas()
+	if len(rutas) == 0 {
+		return seleccionLoteVacia
+	}
+
+	tieneLocales := false
+	tieneRemotos := false
+	for _, ruta := range rutas {
+		archivo, ok := a.archivoPorRuta(ruta)
+		if !ok {
+			continue
+		}
+		if archivoEsRemotoYandex(archivo) {
+			tieneRemotos = true
+		} else {
+			tieneLocales = true
+		}
+		if tieneLocales && tieneRemotos {
+			return seleccionLoteMixta
+		}
+	}
+
+	switch {
+	case tieneLocales && !tieneRemotos:
+		return seleccionLoteLocal
+	case tieneRemotos && !tieneLocales:
+		return seleccionLoteYandex
+	default:
+		return seleccionLoteVacia
+	}
+}
+
 func (a *Aplicacion) rutasSeleccionadas() []string {
 	rutas := make([]string, 0, len(a.seleccionLote))
 	for ruta, activa := range a.seleccionLote {
@@ -1872,9 +2583,9 @@ func (a *Aplicacion) archivoPorRuta(ruta string) (modelo.Archivo, bool) {
 }
 
 func (a *Aplicacion) moverSeleccionLote() {
-	destinoDir := strings.TrimSpace(a.editorDestinoLote.Text())
-	if destinoDir == "" {
-		a.establecerEstado("Indica una carpeta destino para mover la selección", nil)
+	destinoDir, err := a.validarCarpetaDestinoLocal(a.rutaDestinoLoteLocal)
+	if err != nil {
+		a.establecerEstado("Selecciona una carpeta local válida para mover la selección", err)
 		return
 	}
 	a.procesarSeleccionLote(func(archivo modelo.Archivo) error {
@@ -1927,10 +2638,58 @@ func (a *Aplicacion) enviarSeleccionLoteAPapelera() {
 	})
 }
 
+func (a *Aplicacion) descargarSeleccionLoteRemota() {
+	destinoDir, err := a.validarCarpetaDestinoLocal(a.rutaDestinoLoteLocal)
+	if err != nil {
+		a.establecerEstado("Selecciona una carpeta local válida para descargar la selección remota", err)
+		return
+	}
+
+	a.procesarSeleccionLoteYandex(func(archivo modelo.Archivo) error {
+		if archivo.EsDirectorio {
+			return fmt.Errorf("la descarga de carpetas remotas aún no está disponible: %s", archivo.NombreVisible())
+		}
+		rutaGuardada, err := a.descargarArchivoRemotoEnCarpeta(context.Background(), archivo, destinoDir)
+		if err != nil {
+			return err
+		}
+		archivoLocal, err := a.analizarArchivoLocalEnRuta(context.Background(), rutaGuardada)
+		if err != nil {
+			return err
+		}
+		return a.almacen.GuardarArchivo(context.Background(), archivoLocal)
+	}, true)
+}
+
+func (a *Aplicacion) moverSeleccionLoteRemota() {
+	destinoBase := normalizarRutaYandexUI(a.rutaDestinoLoteRemoto)
+	if destinoBase == "" {
+		destinoBase = "disk:/"
+	}
+
+	a.procesarSeleccionLoteYandex(func(archivo modelo.Archivo) error {
+		destino := normalizarRutaYandexUI(destinoBase + "/" + archivo.NombreVisible())
+		if destino == normalizarRutaYandexUI(archivo.Ruta) {
+			return fmt.Errorf("el elemento %s ya está en la carpeta remota seleccionada", archivo.NombreVisible())
+		}
+		return a.clienteYandex.Mover(context.Background(), archivo.Ruta, destino)
+	}, false)
+}
+
+func (a *Aplicacion) enviarSeleccionLoteRemotaAPapelera() {
+	a.procesarSeleccionLoteYandex(func(archivo modelo.Archivo) error {
+		return a.clienteYandex.EnviarAPapelera(context.Background(), archivo.Ruta)
+	}, false)
+}
+
 func (a *Aplicacion) procesarSeleccionLote(accion func(archivo modelo.Archivo) error) {
 	rutas := a.rutasSeleccionadas()
 	if len(rutas) == 0 {
 		a.establecerEstado("No hay elementos seleccionados para la acción en lote", nil)
+		return
+	}
+	if !a.seleccionLoteAdmiteAccionesLocales() {
+		a.establecerEstado("Las acciones por lote sólo están disponibles para archivos locales en el Explorador actual", nil)
 		return
 	}
 
@@ -1963,8 +2722,55 @@ func (a *Aplicacion) procesarSeleccionLote(accion func(archivo modelo.Archivo) e
 	}()
 }
 
+func (a *Aplicacion) procesarSeleccionLoteYandex(accion func(archivo modelo.Archivo) error, refrescarColecciones bool) {
+	rutas := a.rutasSeleccionadas()
+	if len(rutas) == 0 {
+		a.establecerEstado("No hay elementos remotos seleccionados para la acción en lote", nil)
+		return
+	}
+	if !a.seleccionLoteAdmiteAccionesYandex() {
+		a.establecerEstado("Las acciones en lote remotas requieren que toda la selección pertenezca a Yandex.Disk", nil)
+		return
+	}
+	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+		a.establecerEstado("No hay una conexión de Yandex.Disk disponible para la acción en lote", yandex.ErrNoImplementado)
+		return
+	}
+
+	go func() {
+		var primerError error
+		procesados := 0
+		for _, ruta := range rutas {
+			archivo, ok := a.archivoPorRuta(ruta)
+			if !ok {
+				continue
+			}
+			if err := accion(archivo); err != nil && primerError == nil {
+				primerError = err
+			} else if err == nil {
+				procesados++
+			}
+		}
+
+		a.encolarActualizacion(func() {
+			a.seleccionLote = make(map[string]bool)
+			a.anclaSeleccionLote = ""
+			if primerError != nil {
+				a.establecerEstado(fmt.Sprintf("Acción remota por lotes con errores. %d elementos procesados", procesados), primerError)
+			} else {
+				a.establecerEstado(fmt.Sprintf("Acción remota completada para %d elementos", procesados), nil)
+			}
+			a.reiniciarListadoPreservandoPosicion()
+			if refrescarColecciones {
+				a.recargarColeccionesLaterales()
+			}
+			a.recargarDuplicados()
+		})
+	}()
+}
+
 func (a *Aplicacion) recortarImagenActiva() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoImagen {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Tipo != modelo.TipoImagen {
 		return
 	}
 	archivo := a.archivoActivo
@@ -2058,7 +2864,7 @@ func (a *Aplicacion) recortarImagenActiva() {
 }
 
 func (a *Aplicacion) convertirImagenActiva() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoImagen {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Tipo != modelo.TipoImagen {
 		return
 	}
 	formato := strings.TrimSpace(a.editorFormatoImagen.Text())
@@ -2081,7 +2887,7 @@ func (a *Aplicacion) convertirImagenActiva() {
 }
 
 func (a *Aplicacion) extraerFrameActivo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo || a.servicioMetadatos == nil {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Tipo != modelo.TipoVideo || a.servicioMetadatos == nil {
 		return
 	}
 
@@ -2112,7 +2918,7 @@ func (a *Aplicacion) extraerFrameActivo() {
 }
 
 func (a *Aplicacion) optimizarVideoActivo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Tipo != modelo.TipoVideo {
 		return
 	}
 	salida := rutaDerivada(a.archivoActivo.Ruta, "web", ".mp4")
@@ -2132,7 +2938,7 @@ func (a *Aplicacion) optimizarVideoActivo() {
 }
 
 func (a *Aplicacion) reproducirArchivoActivo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Ruta == "" {
 		return
 	}
 
@@ -2150,7 +2956,7 @@ func (a *Aplicacion) reproducirArchivoActivo() {
 }
 
 func (a *Aplicacion) abrirCarpetaContenedoraArchivoActivo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Ruta == "" {
+	if !a.tieneArchivoActivo || !archivoEsLocal(a.archivoActivo) || a.archivoActivo.Ruta == "" {
 		return
 	}
 
@@ -2219,7 +3025,9 @@ func (a *Aplicacion) guardarConfiguracion() {
 			a.origenListado = origenListadoCarpeta
 			a.claveListadoActual = cfgNormalizada.CarpetaInicial
 			a.servicioArchivos.ActualizarCarpetaArchivado(cfgNormalizada.CarpetaArchivado)
-			a.clienteYandex = yandex.NuevoClienteNulo(cfgNormalizada.ClaveAPIYandex)
+			a.clienteYandex = yandex.NuevoCliente(cfgNormalizada.ClaveAPIYandex)
+			a.raizArbolYandex = nil
+			a.carpetaYandexSeleccionada = ""
 			a.reconstruirArbol()
 			a.reiniciarListado()
 			a.establecerEstado("Configuración guardada correctamente", nil)
@@ -2247,6 +3055,27 @@ func (a *Aplicacion) alternarFiltrosDesdeUI() {
 }
 
 func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (image.Image, error) {
+	if archivoEsRemotoYandex(archivo) {
+		if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
+			return nil, yandex.ErrNoImplementado
+		}
+		lector, err := a.clienteYandex.DescargarPreview(context.Background(), archivo.Ruta, tamanoPreviewYandex(maximo))
+		if err != nil {
+			return nil, err
+		}
+		defer lector.Close()
+
+		contenido, err := io.ReadAll(lector)
+		if err != nil {
+			return nil, fmt.Errorf("no se pudo leer la vista previa remota: %w", err)
+		}
+		imagenPreview, _, err := image.Decode(bytes.NewReader(contenido))
+		if err != nil {
+			return nil, fmt.Errorf("no se pudo decodificar la vista previa remota: %w", err)
+		}
+		return imagenPreview, nil
+	}
+
 	switch archivo.Tipo {
 	case modelo.TipoImagen:
 		if a.servicioMetadatos == nil {
@@ -2263,6 +3092,21 @@ func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (ima
 			return nil, errors.New("servicio de metadatos no inicializado")
 		}
 		return a.servicioMetadatos.GenerarPreviewImagen(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Orientacion)
+	}
+}
+
+func tamanoPreviewYandex(maximo int) string {
+	switch {
+	case maximo <= 360:
+		return "M"
+	case maximo <= 540:
+		return "L"
+	case maximo <= 900:
+		return "XL"
+	case maximo <= 1_120:
+		return "XXL"
+	default:
+		return "XXXL"
 	}
 }
 
@@ -2379,6 +3223,72 @@ func compararTextoUI(izquierda, derecha string) bool {
 	return izquierda < derecha
 }
 
+func normalizarRutaYandexUI(ruta string) string {
+	ruta = strings.TrimSpace(ruta)
+	if ruta == "" || ruta == "/" || ruta == "disk:" || ruta == "disk:/" {
+		return "disk:/"
+	}
+	if strings.HasPrefix(ruta, "disk:/") {
+		return "disk:/" + strings.TrimPrefix(strings.TrimPrefix(ruta, "disk:/"), "/")
+	}
+	if strings.HasPrefix(ruta, "/") {
+		return "disk:" + ruta
+	}
+	return "disk:/" + strings.TrimPrefix(ruta, "/")
+}
+
+func convertirElementoYandexAArchivo(elemento yandex.ElementoRemoto) modelo.Archivo {
+	nombre := strings.TrimSpace(elemento.Nombre)
+	if nombre == "" {
+		rutaNormalizada := normalizarRutaYandexUI(elemento.Ruta)
+		partes := strings.Split(strings.TrimPrefix(rutaNormalizada, "disk:/"), "/")
+		if len(partes) > 0 {
+			nombre = partes[len(partes)-1]
+		}
+		if nombre == "" {
+			nombre = "Yandex.Disk"
+		}
+	}
+	ruta := normalizarRutaYandexUI(elemento.Ruta)
+	return modelo.Archivo{
+		Origen:       modelo.OrigenYandex,
+		Ruta:         ruta,
+		RutaPadre:    rutaPadreYandex(ruta),
+		Nombre:       nombre,
+		Tamano:       elemento.Tamano,
+		Modificado:   elemento.Modificado,
+		Tipo:         elemento.Tipo,
+		EsOculto:     modelo.EsOcultoPorNombre(nombre),
+		EsDirectorio: elemento.EsDirectorio,
+		Hashes: modelo.HashesArchivo{
+			MD5:    strings.TrimSpace(elemento.HashMD5),
+			SHA256: strings.TrimSpace(elemento.HashSHA256),
+		},
+	}
+}
+
+func rutaPadreYandex(ruta string) string {
+	ruta = normalizarRutaYandexUI(ruta)
+	if ruta == "disk:/" {
+		return "disk:/"
+	}
+	relativa := strings.TrimPrefix(ruta, "disk:/")
+	relativa = strings.TrimPrefix(relativa, "/")
+	if relativa == "" || !strings.Contains(relativa, "/") {
+		return "disk:/"
+	}
+	partes := strings.Split(relativa, "/")
+	return normalizarRutaYandexUI("disk:/" + strings.Join(partes[:len(partes)-1], "/"))
+}
+
+func archivoEsRemotoYandex(archivo modelo.Archivo) bool {
+	return archivo.Origen == modelo.OrigenYandex
+}
+
+func archivoEsLocal(archivo modelo.Archivo) bool {
+	return !archivoEsRemotoYandex(archivo)
+}
+
 func convertirOpcionesLaterales(valores []string) []opcionFiltroLateral {
 	opciones := make([]opcionFiltroLateral, 0, len(valores))
 	for _, valor := range valores {
@@ -2453,6 +3363,11 @@ func (a *Aplicacion) tituloListadoActual() string {
 		return "Lugar: " + a.claveListadoActual
 	case origenListadoUbicacionSinNombre:
 		return "Lugar: " + etiquetaUbicacionSinNombre
+	case origenListadoCarpetaYandex:
+		if a.carpetaYandexSeleccionada == "" || a.carpetaYandexSeleccionada == "disk:/" {
+			return "Yandex.Disk"
+		}
+		return "Yandex.Disk: " + strings.TrimPrefix(a.carpetaYandexSeleccionada, "disk:/")
 	default:
 		return a.carpetaSeleccionada
 	}
@@ -2491,6 +3406,35 @@ func (a *Aplicacion) fusionarHijosNodo(nodo *nodoArbolUI, subdirectorios []index
 			continue
 		}
 		nuevos = append(nuevos, &nodoArbolUI{
+			Origen:  modelo.OrigenLocal,
+			Ruta:    subdirectorio.Ruta,
+			Nombre:  subdirectorio.Nombre,
+			Cargado: false,
+		})
+	}
+
+	nodo.Hijos = nuevos
+}
+
+func (a *Aplicacion) fusionarHijosNodoYandex(nodo *nodoArbolUI, subdirectorios []yandex.ElementoRemoto) {
+	existentes := make(map[string]*nodoArbolUI, len(nodo.Hijos))
+	for _, hijo := range nodo.Hijos {
+		existentes[hijo.Ruta] = hijo
+	}
+
+	nuevos := make([]*nodoArbolUI, 0, len(subdirectorios))
+	for _, subdirectorio := range subdirectorios {
+		if !subdirectorio.EsDirectorio {
+			continue
+		}
+		if previo, existe := existentes[subdirectorio.Ruta]; existe {
+			previo.Nombre = subdirectorio.Nombre
+			previo.Origen = modelo.OrigenYandex
+			nuevos = append(nuevos, previo)
+			continue
+		}
+		nuevos = append(nuevos, &nodoArbolUI{
+			Origen:  modelo.OrigenYandex,
 			Ruta:    subdirectorio.Ruta,
 			Nombre:  subdirectorio.Nombre,
 			Cargado: false,
@@ -2565,6 +3509,7 @@ func (a *Aplicacion) sincronizarArbolConRuta(ruta string) error {
 		if siguiente == nil {
 			rutaHija := filepath.Join(actual.Ruta, parte)
 			siguiente = &nodoArbolUI{
+				Origen:    modelo.OrigenLocal,
 				Ruta:      rutaHija,
 				Nombre:    parte,
 				Expandido: false,
@@ -2585,5 +3530,87 @@ func (a *Aplicacion) sincronizarArbolConRuta(ruta string) error {
 		a.asegurarHijosNodo(actual)
 	}
 
+	return nil
+}
+
+func (a *Aplicacion) sincronizarArbolYandexConRuta(ruta string) error {
+	if a.raizArbolYandex == nil || ruta == "" {
+		return nil
+	}
+
+	ruta = normalizarRutaYandexUI(ruta)
+	actual := a.raizArbolYandex
+	actual.Expandido = true
+	if err := a.cargarHijosNodoYandexSincrono(actual); err != nil {
+		return err
+	}
+
+	if ruta == actual.Ruta {
+		return nil
+	}
+
+	relativa := strings.TrimPrefix(ruta, "disk:/")
+	relativa = strings.TrimPrefix(relativa, "/")
+	partes := strings.Split(relativa, "/")
+	for _, parte := range partes {
+		parte = strings.TrimSpace(parte)
+		if parte == "" || parte == "." {
+			continue
+		}
+
+		if !actual.Cargado {
+			if err := a.cargarHijosNodoYandexSincrono(actual); err != nil {
+				return err
+			}
+		}
+
+		var siguiente *nodoArbolUI
+		for _, hijo := range actual.Hijos {
+			if strings.EqualFold(strings.TrimSpace(hijo.Nombre), parte) {
+				siguiente = hijo
+				break
+			}
+		}
+		if siguiente == nil {
+			rutaHija := normalizarRutaYandexUI(actual.Ruta + "/" + parte)
+			siguiente = &nodoArbolUI{
+				Origen:    modelo.OrigenYandex,
+				Ruta:      rutaHija,
+				Nombre:    parte,
+				Expandido: false,
+				Cargado:   false,
+			}
+			actual.Hijos = append(actual.Hijos, siguiente)
+			sort.SliceStable(actual.Hijos, func(i, j int) bool {
+				return compararTextoUI(actual.Hijos[i].Nombre, actual.Hijos[j].Nombre)
+			})
+		}
+
+		siguiente.Expandido = true
+		actual = siguiente
+	}
+
+	if actual != nil {
+		actual.Expandido = true
+		a.asegurarHijosNodo(actual)
+	}
+
+	return nil
+}
+
+func (a *Aplicacion) cargarHijosNodoYandexSincrono(nodo *nodoArbolUI) error {
+	if nodo == nil {
+		return nil
+	}
+	subdirectorios, err := a.listarDirectoriosYandex(context.Background(), nodo.Ruta)
+	if err != nil {
+		return err
+	}
+	a.fusionarHijosNodoYandex(nodo, subdirectorios)
+	sort.SliceStable(nodo.Hijos, func(i, j int) bool {
+		return compararTextoUI(nodo.Hijos[i].Nombre, nodo.Hijos[j].Nombre)
+	})
+	nodo.Cargado = true
+	nodo.Cargando = false
 	return nil
 }

@@ -128,13 +128,23 @@ func (s *Servicio) AbrirEnSistema(ctx context.Context, ruta string) error {
 
 // GuardarContenidoLocal guarda un flujo remoto en una ruta local.
 func (s *Servicio) GuardarContenidoLocal(destino string, lector io.Reader) error {
-	if err := os.MkdirAll(filepath.Dir(destino), 0o755); err != nil {
-		return fmt.Errorf("no se pudo preparar el directorio local: %w", err)
+	_, err := s.GuardarContenidoLocalDisponible(destino, lector)
+	return err
+}
+
+// GuardarContenidoLocalDisponible guarda un flujo remoto respetando colisiones de nombre.
+func (s *Servicio) GuardarContenidoLocalDisponible(destino string, lector io.Reader) (string, error) {
+	rutaFinal, err := rutaDisponible(destino)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(rutaFinal), 0o755); err != nil {
+		return "", fmt.Errorf("no se pudo preparar el directorio local: %w", err)
 	}
 
-	archivo, err := os.Create(destino)
+	archivo, err := os.Create(rutaFinal)
 	if err != nil {
-		return fmt.Errorf("no se pudo crear el archivo local: %w", err)
+		return "", fmt.Errorf("no se pudo crear el archivo local: %w", err)
 	}
 	defer archivo.Close()
 
@@ -142,9 +152,9 @@ func (s *Servicio) GuardarContenidoLocal(destino string, lector io.Reader) error
 	defer s.poolBuffers.Put(buffer)
 
 	if _, err := io.CopyBuffer(archivo, lector, buffer); err != nil {
-		return fmt.Errorf("no se pudo guardar el contenido remoto: %w", err)
+		return "", fmt.Errorf("no se pudo guardar el contenido remoto: %w", err)
 	}
-	return nil
+	return rutaFinal, nil
 }
 
 func (s *Servicio) copiarArchivo(origen, destino string) error {

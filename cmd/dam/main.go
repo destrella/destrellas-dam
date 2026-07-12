@@ -39,7 +39,7 @@ func main() {
 	listador := indexador.NuevoListadorLocal(almacenSQLite)
 	servicioIndexador := indexador.NuevoServicio(almacenSQLite, servicioMetadatos, cfg.ConcurrenciaIndexado)
 	servicioDuplicados := duplicados.NuevoServicio(almacenSQLite, servicioIndexador)
-	clienteYandex := yandex.NuevoClienteNulo(cfg.ClaveAPIYandex)
+	clienteYandex := yandex.NuevoCliente(cfg.ClaveAPIYandex)
 
 	go func() {
 		ventana := new(app.Window)

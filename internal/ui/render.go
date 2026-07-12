@@ -21,7 +21,6 @@ import (
 
 	"destrellas-dam/internal/component"
 	"destrellas-dam/internal/modelo"
-	"destrellas-dam/internal/yandex"
 )
 
 type grupoElementosUI struct {
@@ -210,6 +209,14 @@ func (a *Aplicacion) dibujarVistaDuplicados(gtx layout.Context) layout.Dimension
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarTextoSecundario(gtx, fmt.Sprintf("Directorios: %d | Archivos: %d | Analizados: %d", a.progresoDuplicados.DirectoriosProcesados, a.progresoDuplicados.ArchivosEncontrados, a.progresoDuplicados.ArchivosAnalizados))
 						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if strings.TrimSpace(a.progresoDuplicados.RutaActual) == "" {
+								return layout.Dimensions{}
+							}
+							return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarTextoSecundario(gtx, "Actual: "+a.progresoDuplicados.RutaActual)
+							})
+						}),
 						layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarEditorCampo(gtx, "Ruta a escanear", &a.editorRutaEscaneoDuplicados)
@@ -226,8 +233,8 @@ func (a *Aplicacion) dibujarVistaDuplicados(gtx layout.Context) layout.Dimension
 						}),
 						layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &a.botonEscanearRemoto, "Escanear remotos", a.paleta.PanelElevado, a.paleta.Texto, func() {
-								a.establecerEstado("La integración remota está encapsulada, pero esta primera base no la completa todavía", yandex.ErrNoImplementado)
+							return a.dibujarBotonAccion(gtx, &a.botonEscanearRemoto, a.etiquetaBotonEscaneoRemoto(), a.paleta.PanelElevado, a.paleta.Texto, func() {
+								a.iniciarDescubrimientoRemoto()
 							})
 						}),
 						layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
@@ -454,13 +461,13 @@ func (a *Aplicacion) dibujarColumnaCentral(gtx layout.Context) layout.Dimensions
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					if len(a.seleccionLote) == 0 {
+					if len(a.rutasSeleccionadas()) < 2 {
 						return layout.Dimensions{}
 					}
 					return a.dibujarBarraLote(gtx)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					if len(a.seleccionLote) == 0 {
+					if len(a.rutasSeleccionadas()) < 2 {
 						return layout.Dimensions{}
 					}
 					return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx)
@@ -509,7 +516,7 @@ func (a *Aplicacion) dibujarBloquesDetalle(gtx layout.Context) layout.Dimensions
 		}),
 	}
 
-	if a.archivoActivo.EsMultimedia() {
+	if archivoEsLocal(a.archivoActivo) && a.archivoActivo.EsMultimedia() {
 		hijos = append(hijos,
 			layout.Rigid(a.paddingSeparadorDetalle()),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -596,6 +603,12 @@ func (a *Aplicacion) dibujarPestanasLateral(gtx layout.Context) layout.Dimension
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarBotonNavegacionIcono(gtx, &a.botonPestanaYandex, a.pestanaLateral == pestanaYandex, func() {
 				a.pestanaLateral = pestanaYandex
+				if a.clienteYandex != nil && a.clienteYandex.Configurado() {
+					a.asegurarArbolYandex()
+					if a.origenListado != origenListadoCarpetaYandex && a.carpetaYandexSeleccionada == "" {
+						a.seleccionarCarpetaYandex("disk:/")
+					}
+				}
 			}, a.dibujarIconoPestanaYandex)
 		}),
 	)
@@ -714,7 +727,14 @@ func (a *Aplicacion) dibujarListaConBarra(gtx layout.Context, lista *widget.List
 }
 
 func (a *Aplicacion) dibujarArbolDirectorios(gtx layout.Context) layout.Dimensions {
-	visibles := a.aplanarArbol()
+	return a.dibujarArbolDesdeRaiz(gtx, a.aplanarArbol())
+}
+
+func (a *Aplicacion) dibujarArbolYandex(gtx layout.Context) layout.Dimensions {
+	return a.dibujarArbolDesdeRaiz(gtx, a.aplanarArbolYandex())
+}
+
+func (a *Aplicacion) dibujarArbolDesdeRaiz(gtx layout.Context, visibles []nodoVisible) layout.Dimensions {
 	return a.dibujarListaConBarra(gtx, &a.listaLateral, len(visibles), func(gtx layout.Context, indice int) layout.Dimensions {
 		nodo := visibles[indice]
 		return layout.Inset{Left: unit.Dp(float32(nodo.Nivel) * 14), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -730,6 +750,9 @@ func (a *Aplicacion) dibujarArbolDirectorios(gtx layout.Context) layout.Dimensio
 				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					activo := a.carpetaSeleccionada == nodo.Nodo.Ruta
+					if nodo.Nodo.Origen == modelo.OrigenYandex {
+						activo = a.carpetaYandexSeleccionada == nodo.Nodo.Ruta
+					}
 					return a.dibujarFilaArbol(gtx, &nodo.Nodo.Seleccionar, nodo.Nodo.Nombre, activo, func() {
 						a.seleccionarNodoArbol(nodo.Nodo)
 					})
@@ -739,11 +762,81 @@ func (a *Aplicacion) dibujarArbolDirectorios(gtx layout.Context) layout.Dimensio
 	})
 }
 
+func (a *Aplicacion) dibujarSelectorDirectorioLocal(gtx layout.Context, titulo, rutaSeleccionada string, lista *widget.List, mapa map[string]*widgetsSelectorDirectorio, alSeleccionar func(string)) layout.Dimensions {
+	a.asegurarArbolLocal()
+	return a.dibujarSelectorDirectorio(gtx, titulo, a.aplanarArbol(), rutaSeleccionada, lista, mapa, alSeleccionar)
+}
+
+func (a *Aplicacion) dibujarSelectorDirectorioYandex(gtx layout.Context, titulo, rutaSeleccionada string, lista *widget.List, mapa map[string]*widgetsSelectorDirectorio, alSeleccionar func(string)) layout.Dimensions {
+	a.asegurarArbolYandex()
+	return a.dibujarSelectorDirectorio(gtx, titulo, a.aplanarArbolYandex(), rutaSeleccionada, lista, mapa, alSeleccionar)
+}
+
+func (a *Aplicacion) dibujarSelectorDirectorio(gtx layout.Context, titulo string, visibles []nodoVisible, rutaSeleccionada string, lista *widget.List, mapa map[string]*widgetsSelectorDirectorio, alSeleccionar func(string)) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarTextoSecundario(gtx, titulo)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return dibujarPanelConBorde(gtx, a.paleta.Panel, a.paleta.Borde, unit.Dp(10), unit.Dp(1), func(gtx layout.Context) layout.Dimensions {
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoPrincipalTruncado(gtx, rutaSeleccionada)
+				})
+			})
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			alto := gtx.Dp(unit.Dp(180))
+			if alto < 120 {
+				alto = 120
+			}
+			return dibujarPanelConBorde(gtx, a.paleta.Panel, a.paleta.Borde, unit.Dp(12), unit.Dp(1), func(gtx layout.Context) layout.Dimensions {
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.Y = alto
+					gtx.Constraints.Max.Y = alto
+					return a.dibujarListaConBarra(gtx, lista, len(visibles), func(gtx layout.Context, indice int) layout.Dimensions {
+						nodo := visibles[indice]
+						widgets := a.asegurarWidgetSelectorDirectorio(mapa, nodo.Nodo.Origen, nodo.Nodo.Ruta)
+						return layout.Inset{Left: unit.Dp(float32(nodo.Nivel) * 14), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									return a.dibujarBotonIconoCarpeta(gtx, &widgets.Alternar, nodo.Nodo.Expandido, func() {
+										if !nodo.Nodo.Cargado {
+											a.asegurarHijosNodo(nodo.Nodo)
+										}
+										nodo.Nodo.Expandido = !nodo.Nodo.Expandido
+									})
+								}),
+								layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+									return a.dibujarFilaArbol(gtx, &widgets.Seleccionar, nodo.Nodo.Nombre, rutaSeleccionada == nodo.Nodo.Ruta, func() {
+										if alSeleccionar != nil {
+											alSeleccionar(nodo.Nodo.Ruta)
+										}
+									})
+								}),
+							)
+						})
+					})
+				})
+			})
+		}),
+	)
+}
+
 func (a *Aplicacion) dibujarVistaYandex(gtx layout.Context) layout.Dimensions {
 	if !a.clienteYandex.Configurado() {
 		return a.dibujarTextoPrincipal(gtx, "Configura una clave API para habilitar la pestaña remota.")
 	}
-	return a.dibujarTextoPrincipal(gtx, "La arquitectura remota ya está encapsulada. Falta completar el cliente real de Yandex.Disk sobre este contrato.")
+	a.asegurarArbolYandex()
+	if a.raizArbolYandex == nil {
+		return a.dibujarTextoPrincipal(gtx, "No se pudo preparar el árbol remoto de Yandex.Disk.")
+	}
+	if a.raizArbolYandex.Cargando && len(a.raizArbolYandex.Hijos) == 0 {
+		return a.dibujarTextoPrincipal(gtx, "Cargando carpetas remotas de Yandex.Disk...")
+	}
+	return a.dibujarArbolYandex(gtx)
 }
 
 func (a *Aplicacion) dibujarListaOpcionesLaterales(gtx layout.Context, titulo string, editorFiltro *widget.Editor, elementos []opcionFiltroLateral, origen tipoOrigenListado, alSeleccionar func(opcionFiltroLateral)) layout.Dimensions {
@@ -821,37 +914,92 @@ func coincideTextoBusqueda(valor, consulta string) bool {
 func (a *Aplicacion) dibujarBarraLote(gtx layout.Context) layout.Dimensions {
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			tipoSeleccion := a.tipoSeleccionLote()
+			hijos := []layout.FlexChild{
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return a.dibujarTextoPrincipal(gtx, fmt.Sprintf("%d elementos seleccionados", len(a.rutasSeleccionadas())))
 				}),
-				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarEditorCampo(gtx, "Carpeta destino", &a.editorDestinoLote)
-				}),
-				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &a.botonMoverLote, "Mover selección", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
-								a.moverSeleccionLote()
-							})
-						}),
-						layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &a.botonArchivarLote, "Archivar", a.paleta.Exito, a.paleta.Texto, func() {
-								a.archivarSeleccionLote()
-							})
-						}),
-						layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &a.botonPapeleraLote, "Papelera", a.paleta.Peligro, a.paleta.Texto, func() {
-								a.enviarSeleccionLoteAPapelera()
-							})
-						}),
-					)
-				}),
-			)
+			}
+
+			switch tipoSeleccion {
+			case seleccionLoteLocal:
+				hijos = append(hijos,
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarSelectorDirectorioLocal(gtx, "Carpeta local destino", a.rutaDestinoLoteLocal, &a.listaSelectorLoteLocal, a.widgetsSelectorLoteLocal, func(ruta string) {
+							a.establecerRutaDestinoLoteLocal(ruta)
+						})
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccion(gtx, &a.botonMoverLote, "Mover selección", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
+									a.moverSeleccionLote()
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccion(gtx, &a.botonArchivarLote, "Archivar", a.paleta.Exito, a.paleta.Texto, func() {
+									a.archivarSeleccionLote()
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccionIcono(gtx, &a.botonPapeleraLote, a.paleta.Peligro, a.paleta.Texto, func() {
+									a.enviarSeleccionLoteAPapelera()
+								}, a.dibujarIconoPapelera)
+							}),
+						)
+					}),
+				)
+			case seleccionLoteYandex:
+				hijos = append(hijos,
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarSelectorDirectorioLocal(gtx, "Descargar a carpeta local", a.rutaDestinoLoteLocal, &a.listaSelectorLoteLocal, a.widgetsSelectorLoteLocal, func(ruta string) {
+							a.establecerRutaDestinoLoteLocal(ruta)
+						})
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarSelectorDirectorioYandex(gtx, "Mover a carpeta remota", a.rutaDestinoLoteRemoto, &a.listaSelectorLoteRemoto, a.widgetsSelectorLoteRemoto, func(ruta string) {
+							a.establecerRutaDestinoLoteRemoto(ruta)
+						})
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccion(gtx, &a.botonDescargarLote, "Descargar", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
+									a.descargarSeleccionLoteRemota()
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccion(gtx, &a.botonMoverLote, "Mover", a.paleta.Exito, a.paleta.Texto, func() {
+									a.moverSeleccionLoteRemota()
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccionIcono(gtx, &a.botonPapeleraLote, a.paleta.Peligro, a.paleta.Texto, func() {
+									a.enviarSeleccionLoteRemotaAPapelera()
+								}, a.dibujarIconoPapelera)
+							}),
+						)
+					}),
+				)
+			case seleccionLoteMixta:
+				hijos = append(hijos,
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarTextoSecundario(gtx, "Las acciones en lote no admiten mezclar elementos locales y remotos en la misma selección.")
+					}),
+				)
+			}
+
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, hijos...)
 		})
 	})
 }
@@ -1235,11 +1383,12 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 		maximoPreview = 4_096
 	}
 
-	if archivo.Tipo != modelo.TipoVideo {
+	if archivoEsRemotoYandex(archivo) || archivo.Tipo != modelo.TipoVideo {
+		interactiva := archivoEsLocal(archivo)
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return a.dibujarContenedorNavegacionVisor(gtx, func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarPreviewComun(gtx, archivo, maximoPreview, true)
+					return a.dibujarPreviewComun(gtx, archivo, maximoPreview, interactiva)
 				})
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
@@ -1371,6 +1520,34 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 func (a *Aplicacion) dibujarBarraAccionesVisor(gtx layout.Context, archivo modelo.Archivo) layout.Dimensions {
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			if archivoEsRemotoYandex(archivo) {
+				etiquetaPrincipal := "Descargar"
+				accionPrincipal := func() {
+					a.guardarArchivoRemotoActivo()
+				}
+				if archivo.EsDirectorio {
+					etiquetaPrincipal = "Volver"
+					accionPrincipal = func() {
+						a.vistaActual = vistaPrincipal
+					}
+				}
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(2, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarCampoNombreVisor(gtx, archivo.NombreVisible())
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarBotonAccion(gtx, &a.botonDescargarActivo, etiquetaPrincipal, a.paleta.Acento, a.paleta.TextoSobreAcento, accionPrincipal)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarBotonAccion(gtx, &a.botonAbrirCarpetaContenedora, "Explorador", a.paleta.Panel, a.paleta.Texto, func() {
+							a.vistaActual = vistaPrincipal
+						})
+					}),
+				)
+			}
+
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(2, func(gtx layout.Context) layout.Dimensions {
 					return a.dibujarCampoNombreVisor(gtx, archivo.NombreVisible())
@@ -1589,11 +1766,19 @@ func (a *Aplicacion) dibujarEtiquetaRegion(gtx layout.Context, posicion image.Po
 }
 
 func (a *Aplicacion) dibujarFichaArchivo(gtx layout.Context, archivo modelo.Archivo) layout.Dimensions {
+	origen := "Local"
+	if archivoEsRemotoYandex(archivo) {
+		origen = "Yandex.Disk"
+	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarTextoPrincipal(gtx, archivo.Ruta)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarTextoSecundario(gtx, "Origen: "+origen)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarTextoSecundario(gtx, fmt.Sprintf("Tamaño: %s", formatearTamano(archivo.Tamano)))
 		}),
@@ -1621,16 +1806,83 @@ func (a *Aplicacion) dibujarFichaArchivo(gtx layout.Context, archivo modelo.Arch
 
 func (a *Aplicacion) dibujarAccionesArchivo(gtx layout.Context) layout.Dimensions {
 	mostrarArchivar := a.tieneArchivoActivo && archivoTieneFechaYHoraArchivables(a.archivoActivo)
+	esRemotoYandex := a.tieneArchivoActivo && archivoEsRemotoYandex(a.archivoActivo)
 
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			if esRemotoYandex {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarTituloPanel(gtx, "Acciones sobre el archivo")
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if a.archivoActivo.EsDirectorio {
+							return layout.Dimensions{}
+						}
+						return a.dibujarSelectorDirectorioLocal(gtx, "Descargar a carpeta local", a.rutaDestinoActivoLocal, &a.listaSelectorActivoLocal, a.widgetsSelectorActivoLocal, func(ruta string) {
+							a.establecerRutaDestinoActivoLocal(ruta)
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if a.archivoActivo.EsDirectorio {
+							return layout.Dimensions{}
+						}
+						return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarSelectorDirectorioYandex(gtx, "Mover a carpeta remota", a.rutaDestinoActivoRemoto, &a.listaSelectorActivoRemoto, a.widgetsSelectorActivoRemoto, func(ruta string) {
+							a.establecerRutaDestinoActivoRemoto(ruta)
+						})
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						hijos := make([]layout.FlexChild, 0, 5)
+						if !a.archivoActivo.EsDirectorio {
+							hijos = append(hijos,
+								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+									return a.dibujarBotonAccion(gtx, &a.botonGuardarLocalActivo, "Descargar", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
+										a.guardarArchivoRemotoActivo()
+									})
+								}),
+								layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							)
+						}
+						hijos = append(hijos,
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccion(gtx, &a.botonMoverActivo, "Mover", a.paleta.Exito, a.paleta.Texto, func() {
+									a.moverArchivoRemotoActivo()
+								})
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonAccionIcono(gtx, &a.botonPapeleraActiva, a.paleta.Peligro, a.paleta.Texto, func() {
+									a.enviarArchivoRemotoActivoAPapelera()
+								}, a.dibujarIconoPapelera)
+							}),
+						)
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx, hijos...)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !a.archivoActivo.EsDirectorio {
+							return layout.Dimensions{}
+						}
+						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarTextoSecundario(gtx, "La descarga directa de carpetas remotas aún no está disponible, pero sí puedes moverlas o enviarlas a la papelera remota.")
+						})
+					}),
+				)
+			}
+
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return a.dibujarTituloPanel(gtx, "Acciones sobre el archivo")
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarEditorCampo(gtx, "Mover a carpeta", &a.editorDestinoMover)
+					return a.dibujarSelectorDirectorioLocal(gtx, "Mover a carpeta local", a.rutaDestinoActivoLocal, &a.listaSelectorActivoLocal, a.widgetsSelectorActivoLocal, func(ruta string) {
+						a.establecerRutaDestinoActivoLocal(ruta)
+					})
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1653,10 +1905,10 @@ func (a *Aplicacion) dibujarAccionesArchivo(gtx layout.Context) layout.Dimension
 					}
 					hijos = append(hijos,
 						layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &a.botonPapeleraActiva, "Papelera", a.paleta.Peligro, a.paleta.Texto, func() {
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarBotonAccionIcono(gtx, &a.botonPapeleraActiva, a.paleta.Peligro, a.paleta.Texto, func() {
 								a.enviarArchivoActivoAPapelera()
-							})
+							}, a.dibujarIconoPapelera)
 						}),
 					)
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx, hijos...)
