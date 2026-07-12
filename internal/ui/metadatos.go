@@ -1568,8 +1568,24 @@ func (a *Aplicacion) dibujarBotonDiaCalendario(gtx layout.Context, dia diaCalend
 }
 
 func (a *Aplicacion) dibujarDireccionGPS(gtx layout.Context, direccion serviciometadatos.DireccionGPS) layout.Dimensions {
+	return a.dibujarDireccionGPSConCajas(gtx, direccion, image.Pt(20, 20), image.Pt(18, 18))
+}
+
+func (a *Aplicacion) dibujarDireccionGPSConCajas(gtx layout.Context, direccion serviciometadatos.DireccionGPS, cajaUbicacion, cajaBandera image.Point) layout.Dimensions {
 	if strings.TrimSpace(direccion.Ciudad) == "" && strings.TrimSpace(direccion.Estado) == "" && strings.TrimSpace(direccion.Pais) == "" {
 		return layout.Dimensions{}
+	}
+	if cajaUbicacion.X < 1 {
+		cajaUbicacion.X = 20
+	}
+	if cajaUbicacion.Y < 1 {
+		cajaUbicacion.Y = 20
+	}
+	if cajaBandera.X < 1 {
+		cajaBandera.X = 18
+	}
+	if cajaBandera.Y < 1 {
+		cajaBandera.Y = 18
 	}
 
 	primeraLinea := strings.Trim(strings.Join([]string{direccion.Ciudad, direccion.Estado}, ", "), ", ")
@@ -1580,7 +1596,7 @@ func (a *Aplicacion) dibujarDireccionGPS(gtx layout.Context, direccion serviciom
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return a.dibujarIconoIndicadorUbicacion(gtx, a.paleta.Exito, a.paleta.Panel)
+								return dibujarIconoEnCaja(gtx, cajaUbicacion, a.dibujarIconoIndicadorUbicacion, a.paleta.Exito, a.paleta.Panel)
 							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -1592,7 +1608,7 @@ func (a *Aplicacion) dibujarDireccionGPS(gtx layout.Context, direccion serviciom
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return a.dibujarIconoBanderaDetalle(gtx)
+								return a.dibujarIconoBanderaDetalleEnCaja(gtx, cajaBandera)
 							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -1638,8 +1654,28 @@ func (a *Aplicacion) dibujarBloqueAtributoExtendido(gtx layout.Context, valores 
 }
 
 func (a *Aplicacion) dibujarIconoBanderaDetalle(gtx layout.Context) layout.Dimensions {
-	tamano := image.Pt(14, 14)
+	return a.dibujarIconoBanderaDetalleEnCaja(gtx, image.Pt(18, 18))
+}
+
+func (a *Aplicacion) dibujarIconoBanderaDetalleEnCaja(gtx layout.Context, caja image.Point) layout.Dimensions {
+	if caja.X < 1 {
+		caja.X = 18
+	}
+	if caja.Y < 1 {
+		caja.Y = 18
+	}
+
+	contexto := gtx
+	contexto.Constraints = layout.Exact(caja)
+	return a.dibujarIconoBanderaDetalleEscalado(contexto)
+}
+
+func (a *Aplicacion) dibujarIconoBanderaDetalleEscalado(gtx layout.Context) layout.Dimensions {
+	base := image.Pt(14, 14)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	paint.FillShape(gtx.Ops, a.paleta.Acento, clip.Rect(image.Rect(2, 2, 4, 12)).Op())
 	paint.FillShape(gtx.Ops, a.paleta.Texto, clip.Rect(image.Rect(4, 2, 12, 7)).Op())
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }

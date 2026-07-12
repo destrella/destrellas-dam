@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image"
 	"strings"
 
 	"gioui.org/layout"
@@ -359,7 +360,7 @@ func (a *Aplicacion) dibujarDetalleUbicacionGuardada(gtx layout.Context) layout.
 							return a.dibujarTextoPrincipal(gtx, coordenadasTexto(ubicacion.Coordenadas))
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarDireccionGPS(gtx, direccion)
+							return a.dibujarDireccionGPSConCajas(gtx, direccion, image.Pt(60, 60), image.Pt(30, 30))
 						}),
 					)
 				})

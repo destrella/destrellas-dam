@@ -1287,41 +1287,38 @@ func (a *Aplicacion) dibujarPreviewInterrogacion(gtx layout.Context) layout.Dime
 
 func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archivo modelo.Archivo, maximoFotograma int) layout.Dimensions {
 	valorAntes := a.controlProgresoVideo.Value
-	etiquetaReproduccion := "Reproducir"
+	iconoReproduccion := a.dibujarIconoPlay
 	if a.reproductorVideo.Reproduciendo {
-		etiquetaReproduccion = "Pausar"
+		iconoReproduccion = a.dibujarIconoPause
 	}
 
 	dim := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonAccion(gtx, &a.botonAlternarVideo, etiquetaReproduccion, a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
+					return a.dibujarBotonAccionIcono(gtx, &a.botonAlternarVideo, a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
 						a.alternarReproductorVideo()
-					})
+					}, iconoReproduccion)
 				}),
 				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonAccion(gtx, &a.botonReiniciarVideo, "Inicio", a.paleta.PanelElevado, a.paleta.Texto, func() {
+					return a.dibujarBotonAccionIcono(gtx, &a.botonReiniciarVideo, a.paleta.PanelElevado, a.paleta.Texto, func() {
 						a.reiniciarReproductorVideo()
+					}, a.dibujarIconoInicioReproductor)
+				}),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarTextoSecundario(gtx, fmt.Sprintf("%s / %s", formatearDuracion(a.reproductorVideo.Posicion), formatearDuracion(a.reproductorVideo.Duracion)))
 					})
 				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							deslizador := material.Slider(a.tema, &a.controlProgresoVideo)
-							deslizador.Axis = layout.Horizontal
-							deslizador.Color = a.paleta.Acento
-							return deslizador.Layout(gtx)
-						}),
-						layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarTextoSecundario(gtx, fmt.Sprintf("%s / %s", formatearDuracion(a.reproductorVideo.Posicion), formatearDuracion(a.reproductorVideo.Duracion)))
-						}),
-					)
-				}),
 			)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			deslizador := material.Slider(a.tema, &a.controlProgresoVideo)
+			deslizador.Axis = layout.Horizontal
+			deslizador.Color = a.paleta.Acento
+			return deslizador.Layout(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if strings.TrimSpace(a.reproductorVideo.Error) == "" {
@@ -1787,19 +1784,19 @@ func (a *Aplicacion) dibujarGrupoDuplicado(gtx layout.Context, grupo modelo.Grup
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &widgets.BorrarMasAntiguo, "Borrar más antiguo", a.paleta.Peligro, a.paleta.Texto, func() {
+							return a.dibujarBotonAccionIconoConEtiquetaDuplicados(gtx, &widgets.BorrarMasAntiguo, "Borrar más antiguos", a.paleta.Peligro, a.paleta.Texto, func() {
 								if len(grupo.Elementos) > 0 {
 									a.borrarRutasDuplicadas([]string{grupo.Elementos[0].Ruta})
 								}
-							})
+							}, a.dibujarIconoBorrarMasAntiguo)
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarBotonAccion(gtx, &widgets.BorrarMasNuevo, "Borrar más nuevo", a.paleta.Peligro, a.paleta.Texto, func() {
+							return a.dibujarBotonAccionIconoConEtiquetaDuplicados(gtx, &widgets.BorrarMasNuevo, "Borrar más nuevos", a.paleta.Peligro, a.paleta.Texto, func() {
 								if len(grupo.Elementos) > 0 {
 									a.borrarRutasDuplicadas([]string{grupo.Elementos[len(grupo.Elementos)-1].Ruta})
 								}
-							})
+							}, a.dibujarIconoBorrarMasNuevo)
 						}),
 					)
 				}),
@@ -1871,20 +1868,10 @@ func (a *Aplicacion) dibujarCuerpoGrupoDuplicado(gtx layout.Context, grupo model
 
 func anchoPreviewGrupoDuplicado(anchoDisponible int) int {
 	if anchoDisponible <= 0 {
-		return 320
+		return 0
 	}
-
-	ancho := anchoDisponible / 3
-	if anchoDisponible < 680 {
-		ancho = anchoDisponible / 2
-	}
-	if ancho < 180 {
-		ancho = 180
-	}
-	if ancho > 420 {
-		ancho = 420
-	}
-	if ancho > anchoDisponible {
+	ancho := anchoDisponible / 4
+	if ancho < 1 {
 		ancho = anchoDisponible
 	}
 	return ancho
@@ -1917,9 +1904,9 @@ func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, 
 										clic = &widget.Clickable{}
 										widgets.BorrarElemento[elemento.Ruta] = clic
 									}
-									return a.dibujarBotonAccion(gtx, clic, "Eliminar", a.paleta.Peligro, a.paleta.Texto, func() {
+									return a.dibujarBotonAccionIconoDuplicados(gtx, clic, a.paleta.Peligro, a.paleta.Texto, func() {
 										a.borrarRutasDuplicadas([]string{elemento.Ruta})
-									})
+									}, a.dibujarIconoPapelera)
 								}
 								if widgets.Seleccion == nil {
 									widgets.Seleccion = make(map[string]*widget.Bool)
@@ -1976,11 +1963,11 @@ func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, 
 					rutas = append(rutas, ruta)
 				}
 			}
-			return a.dibujarBotonAccion(gtx, &widgets.BorrarMarcados, fmt.Sprintf("Borrar seleccionados (%d)", len(rutas)), a.paleta.Peligro, a.paleta.Texto, func() {
+			return a.dibujarBotonAccionIconoConEtiquetaDuplicados(gtx, &widgets.BorrarMarcados, fmt.Sprintf("%d", len(rutas)), a.paleta.Peligro, a.paleta.Texto, func() {
 				if len(rutas) > 0 {
 					a.borrarRutasDuplicadas(rutas)
 				}
-			})
+			}, a.dibujarIconoPapelera)
 		}))
 	}
 
@@ -2192,7 +2179,9 @@ func (a *Aplicacion) dibujarInsigniaIcono(gtx layout.Context, fondo color.NRGBA,
 	return dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(5)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return dibujar(gtx, a.paleta.TextoSobreAcento, fondo)
+				contexto := gtx
+				contexto.Constraints = layout.Constraints{}
+				return dibujar(contexto, a.paleta.TextoSobreAcento, fondo)
 			})
 		})
 	})
@@ -2209,6 +2198,128 @@ func (a *Aplicacion) dibujarBotonAccion(gtx layout.Context, clic *widget.Clickab
 	estilo.Color = colorTexto
 	estilo.CornerRadius = unit.Dp(10)
 	dim := estilo.Layout(gtx)
+
+	if pulsado {
+		if alHacer != nil {
+			alHacer()
+		}
+		if a.ventana != nil {
+			a.ventana.Invalidate()
+		}
+	}
+	return dim
+}
+
+func (a *Aplicacion) dibujarBotonAccionIcono(gtx layout.Context, clic *widget.Clickable, fondo, colorIcono color.NRGBA, alHacer func(), dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	return a.dibujarBotonAccionIconoCuadrado(gtx, clic, fondo, colorIcono, alHacer, 48, dibujarIcono)
+}
+
+func (a *Aplicacion) dibujarBotonAccionIconoDuplicados(gtx layout.Context, clic *widget.Clickable, fondo, colorIcono color.NRGBA, alHacer func(), dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	return a.dibujarBotonAccionIconoCuadrado(gtx, clic, fondo, colorIcono, alHacer, 64, dibujarIcono)
+}
+
+func (a *Aplicacion) dibujarBotonAccionIconoCuadrado(gtx layout.Context, clic *widget.Clickable, fondo, colorIcono color.NRGBA, alHacer func(), lado int, dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	pulsado := false
+	for clic.Clicked(gtx) {
+		pulsado = true
+	}
+
+	dim := layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		limite := lado
+		if gtx.Constraints.Max.X > limite {
+			gtx.Constraints.Max.X = limite
+		}
+		if gtx.Constraints.Max.Y > limite {
+			gtx.Constraints.Max.Y = limite
+		}
+		if gtx.Constraints.Min.X > gtx.Constraints.Max.X {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		}
+		if gtx.Constraints.Min.Y > gtx.Constraints.Max.Y {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		}
+		if gtx.Constraints.Min.Y < limite && gtx.Constraints.Max.Y >= limite {
+			gtx.Constraints.Min.Y = limite
+		}
+		if gtx.Constraints.Min.X < gtx.Constraints.Min.Y {
+			gtx.Constraints.Min.X = gtx.Constraints.Min.Y
+		}
+		return dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
+			return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return dibujarIconoEnCaja(gtx, cajaDisponible(gtx), dibujarIcono, colorIcono, fondo)
+				})
+			})
+		})
+	})
+
+	if pulsado {
+		if alHacer != nil {
+			alHacer()
+		}
+		if a.ventana != nil {
+			a.ventana.Invalidate()
+		}
+	}
+	return dim
+}
+
+func (a *Aplicacion) dibujarBotonAccionIconoConEtiqueta(gtx layout.Context, clic *widget.Clickable, etiqueta string, fondo, colorIcono color.NRGBA, alHacer func(), dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	return a.dibujarBotonAccionIconoConEtiquetaAltura(gtx, clic, etiqueta, fondo, colorIcono, alHacer, 48, dibujarIcono)
+}
+
+func (a *Aplicacion) dibujarBotonAccionIconoConEtiquetaDuplicados(gtx layout.Context, clic *widget.Clickable, etiqueta string, fondo, colorIcono color.NRGBA, alHacer func(), dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	return a.dibujarBotonAccionIconoConEtiquetaAltura(gtx, clic, etiqueta, fondo, colorIcono, alHacer, 64, dibujarIcono)
+}
+
+func (a *Aplicacion) dibujarBotonAccionIconoConEtiquetaAltura(gtx layout.Context, clic *widget.Clickable, etiqueta string, fondo, colorIcono color.NRGBA, alHacer func(), alto int, dibujarIcono func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions) layout.Dimensions {
+	pulsado := false
+	for clic.Clicked(gtx) {
+		pulsado = true
+	}
+
+	dim := layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		altoObjetivo := alto
+		if gtx.Constraints.Max.Y > altoObjetivo {
+			gtx.Constraints.Max.Y = altoObjetivo
+		}
+		if gtx.Constraints.Min.Y < altoObjetivo && gtx.Constraints.Max.Y >= altoObjetivo {
+			gtx.Constraints.Min.Y = altoObjetivo
+		}
+		if gtx.Constraints.Min.Y > gtx.Constraints.Max.Y {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		}
+
+		return dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
+			return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{
+					Left:  unit.Dp(8),
+					Right: unit.Dp(10),
+				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					ladoIcono := gtx.Constraints.Min.Y
+					if ladoIcono < 1 {
+						ladoIcono = altoObjetivo
+					}
+					cajaIcono := image.Pt(ladoIcono, ladoIcono)
+					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return dibujarIconoEnCaja(gtx, cajaIcono, dibujarIcono, colorIcono, fondo)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if strings.TrimSpace(etiqueta) == "" {
+								return layout.Dimensions{}
+							}
+							return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								estilo := material.Label(a.tema, unit.Sp(12), etiqueta)
+								estilo.Color = colorIcono
+								return estilo.Layout(gtx)
+							})
+						}),
+					)
+				})
+			})
+		})
+	})
 
 	if pulsado {
 		if alHacer != nil {
@@ -2244,15 +2355,30 @@ func (a *Aplicacion) dibujarBotonNavegacionIcono(gtx layout.Context, clic *widge
 		pulsado = true
 	}
 
-	dim := dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
-		return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				altoMinimo := gtx.Dp(unit.Dp(40))
-				if gtx.Constraints.Min.Y < altoMinimo {
-					gtx.Constraints.Min.Y = altoMinimo
-				}
+	dim := layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		limite := 64
+		if gtx.Constraints.Max.X > limite {
+			gtx.Constraints.Max.X = limite
+		}
+		if gtx.Constraints.Max.Y > limite {
+			gtx.Constraints.Max.Y = limite
+		}
+		if gtx.Constraints.Min.X > gtx.Constraints.Max.X {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		}
+		if gtx.Constraints.Min.Y > gtx.Constraints.Max.Y {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		}
+		if gtx.Constraints.Min.X == 0 {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		}
+		if gtx.Constraints.Min.Y == 0 {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		}
+		return dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
+			return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return dibujarIcono(gtx, colorIcono, fondo)
+					return dibujarIconoEnCaja(gtx, cajaDisponible(gtx), dibujarIcono, colorIcono, fondo)
 				})
 			})
 		})
@@ -2314,10 +2440,25 @@ func (a *Aplicacion) dibujarBotonIconoCarpeta(gtx layout.Context, clic *widget.C
 		pulsado = true
 	}
 
-	dim := dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
-		return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return a.dibujarIconoCarpeta(gtx, abierta, image.Pt(22, 18))
+	dim := layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		limite := 48
+		if gtx.Constraints.Max.X > limite {
+			gtx.Constraints.Max.X = limite
+		}
+		if gtx.Constraints.Max.Y > limite {
+			gtx.Constraints.Max.Y = limite
+		}
+		if gtx.Constraints.Min.X > gtx.Constraints.Max.X {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		}
+		if gtx.Constraints.Min.Y > gtx.Constraints.Max.Y {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		}
+		return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
+			return clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarIconoCarpeta(gtx, abierta, image.Pt(48, 48))
+				})
 			})
 		})
 	})
@@ -2331,6 +2472,73 @@ func (a *Aplicacion) dibujarBotonIconoCarpeta(gtx layout.Context, clic *widget.C
 		}
 	}
 	return dim
+}
+
+func cajaDisponible(gtx layout.Context) image.Point {
+	caja := gtx.Constraints.Min
+	if caja.X <= 0 {
+		caja.X = gtx.Constraints.Max.X
+	}
+	if caja.Y <= 0 {
+		caja.Y = gtx.Constraints.Max.Y
+	}
+	if caja.X <= 0 {
+		caja.X = 1
+	}
+	if caja.Y <= 0 {
+		caja.Y = 1
+	}
+	return caja
+}
+
+func dibujarIconoEnCaja(gtx layout.Context, caja image.Point, dibujar func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions, colorIcono, fondo color.NRGBA) layout.Dimensions {
+	contexto := gtx
+	contexto.Constraints = layout.Exact(caja)
+	return dibujar(contexto, colorIcono, fondo)
+}
+
+func tamanoIconoEscalado(gtx layout.Context, base image.Point) image.Point {
+	if base.X < 1 {
+		base.X = 1
+	}
+	if base.Y < 1 {
+		base.Y = 1
+	}
+
+	altoDisponible := gtx.Constraints.Min.Y
+	if altoDisponible <= 0 {
+		altoDisponible = gtx.Constraints.Max.Y
+	}
+	if altoDisponible <= 0 {
+		return base
+	}
+
+	altoObjetivo := maximo(1, int(math.Round(float64(altoDisponible)*0.8)))
+	anchoObjetivo := maximo(1, int(math.Round(float64(base.X)*float64(altoObjetivo)/float64(base.Y))))
+	tamano := image.Pt(anchoObjetivo, altoObjetivo)
+
+	anchoDisponible := gtx.Constraints.Min.X
+	if anchoDisponible <= 0 {
+		anchoDisponible = gtx.Constraints.Max.X
+	}
+	if anchoDisponible > 0 && tamano.X > anchoDisponible {
+		escala := float64(anchoDisponible) / float64(tamano.X)
+		tamano.X = maximo(1, anchoDisponible)
+		tamano.Y = maximo(1, int(math.Round(float64(tamano.Y)*escala)))
+	}
+
+	return tamano
+}
+
+func prepararIconoEscalado(gtx layout.Context, base image.Point) (layout.Context, func(), image.Point) {
+	tamano := tamanoIconoEscalado(gtx, base)
+	escalaX := float32(tamano.X) / float32(base.X)
+	escalaY := float32(tamano.Y) / float32(base.Y)
+	transformacion := op.Affine(f32.Affine2D{}.Scale(f32.Pt(0, 0), f32.Pt(escalaX, escalaY))).Push(gtx.Ops)
+
+	contexto := gtx
+	contexto.Constraints = layout.Exact(base)
+	return contexto, transformacion.Pop, tamano
 }
 
 func (a *Aplicacion) dibujarIconoCarpeta(gtx layout.Context, abierta bool, tamano image.Point) layout.Dimensions {
@@ -2374,7 +2582,10 @@ func (a *Aplicacion) dibujarIconoCarpeta(gtx layout.Context, abierta bool, taman
 }
 
 func (a *Aplicacion) dibujarIconoPestanaDirectorios(gtx layout.Context, colorIcono, _ color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(24, 22)
+	base := image.Pt(24, 22)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	linea := clip.Path{}
 	linea.Begin(gtx.Ops)
 	linea.MoveTo(f32.Pt(6, 4))
@@ -2390,11 +2601,14 @@ func (a *Aplicacion) dibujarIconoPestanaDirectorios(gtx layout.Context, colorIco
 	a.dibujarBloqueDirectorio(gtx, image.Rect(1, 1, 10, 7), colorIcono)
 	a.dibujarBloqueDirectorio(gtx, image.Rect(11, 7, 23, 13), colorIcono)
 	a.dibujarBloqueDirectorio(gtx, image.Rect(11, 15, 23, 21), colorIcono)
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoPestanaEtiqueta(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(24, 22)
+	base := image.Pt(24, 22)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	var ruta clip.Path
 	ruta.Begin(gtx.Ops)
 	ruta.MoveTo(f32.Pt(2, 9))
@@ -2407,11 +2621,14 @@ func (a *Aplicacion) dibujarIconoPestanaEtiqueta(gtx layout.Context, colorIcono,
 	ruta.Close()
 	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: ruta.End()}.Op())
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(14, 4, 18, 8)).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoPestanaLugar(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(22, 24)
+	base := image.Pt(22, 24)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(4, 1, 18, 15)).Op(gtx.Ops))
 
 	var punta clip.Path
@@ -2422,15 +2639,18 @@ func (a *Aplicacion) dibujarIconoPestanaLugar(gtx layout.Context, colorIcono, fo
 	punta.Close()
 	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: punta.End()}.Op())
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(8, 5, 14, 11)).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoPestanaYandex(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(24, 20)
-	return layout.Stack{}.Layout(gtx,
+	base := image.Pt(24, 20)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			a.dibujarDiscoYandex(gtx, colorIcono, fondo)
-			return layout.Dimensions{Size: tamano}
+			return layout.Dimensions{Size: base}
 		}),
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -2440,19 +2660,26 @@ func (a *Aplicacion) dibujarIconoPestanaYandex(gtx layout.Context, colorIcono, f
 			})
 		}),
 	)
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoIndicadorInformacion(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(14, 14)
-	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(0, 0, tamano.X, tamano.Y)).Op(gtx.Ops))
-	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(2, 2, tamano.X-2, tamano.Y-2)).Op(gtx.Ops))
+	base := image.Pt(14, 14)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(0, 0, base.X, base.Y)).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(2, 2, base.X-2, base.Y-2)).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(5, 3, 9, 7)).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(6, 6, 8, 12), 1).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoIndicadorSocial(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(16, 14)
+	base := image.Pt(16, 14)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	var triangulo clip.Path
 	triangulo.Begin(gtx.Ops)
 	triangulo.MoveTo(f32.Pt(8, 0))
@@ -2462,11 +2689,14 @@ func (a *Aplicacion) dibujarIconoIndicadorSocial(gtx layout.Context, colorIcono,
 	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: triangulo.End()}.Op())
 	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(7, 4, 9, 10), 1).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(6, 11, 10, 14)).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoIndicadorIA(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(16, 14)
+	base := image.Pt(16, 14)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(2, 3, 14, 13), 3).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(7, 0, 9, 4), 1).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(5, 6, 7, 8)).Op(gtx.Ops))
@@ -2474,22 +2704,28 @@ func (a *Aplicacion) dibujarIconoIndicadorIA(gtx layout.Context, colorIcono, fon
 	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(5, 9, 11, 10), 1).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(4, 13, 6, 15), 1).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(10, 13, 12, 15), 1).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoIndicadorRostro(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(16, 14)
+	base := image.Pt(16, 14)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(4, 0, 12, 8)).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(6, 2, 8, 4)).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(8, 2, 10, 4)).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(6, 5, 10, 6), 1).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(2, 8, 14, 14), 4).Op(gtx.Ops))
 	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(5, 9, 11, 14), 2).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarIconoIndicadorUbicacion(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
-	tamano := image.Pt(14, 16)
+	base := image.Pt(14, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
 	paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(2, 0, 12, 10)).Op(gtx.Ops))
 	var punta clip.Path
 	punta.Begin(gtx.Ops)
@@ -2499,7 +2735,101 @@ func (a *Aplicacion) dibujarIconoIndicadorUbicacion(gtx layout.Context, colorIco
 	punta.Close()
 	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: punta.End()}.Op())
 	paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(5, 3, 9, 7)).Op(gtx.Ops))
-	return layout.Dimensions{Size: tamano}
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoPapelera(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
+	base := image.Pt(16, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	a.dibujarIconoPapeleraBase(gtx, colorIcono, fondo)
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoPapeleraBase(gtx layout.Context, colorIcono, fondo color.NRGBA) {
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(4, 5, 12, 14), 2).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(3, 3, 13, 5), 1).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(6, 1, 10, 3), 1).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(6, 7, 7, 12), 1).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, fondo, clip.UniformRRect(image.Rect(9, 7, 10, 12), 1).Op(gtx.Ops))
+}
+
+func (a *Aplicacion) dibujarIconoBorrarMasAntiguo(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
+	base := image.Pt(18, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	var flecha clip.Path
+	flecha.Begin(gtx.Ops)
+	flecha.MoveTo(f32.Pt(3, 12))
+	flecha.LineTo(f32.Pt(3, 3))
+	flecha.LineTo(f32.Pt(1, 5))
+	flecha.MoveTo(f32.Pt(3, 3))
+	flecha.LineTo(f32.Pt(5, 5))
+	paint.FillShape(gtx.Ops, colorIcono, clip.Stroke{Path: flecha.End(), Width: 2}.Op())
+	defer op.Offset(image.Pt(4, 0)).Push(gtx.Ops).Pop()
+	a.dibujarIconoPapeleraBase(gtx, colorIcono, fondo)
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoBorrarMasNuevo(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
+	base := image.Pt(18, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	var flecha clip.Path
+	flecha.Begin(gtx.Ops)
+	flecha.MoveTo(f32.Pt(3, 3))
+	flecha.LineTo(f32.Pt(3, 12))
+	flecha.LineTo(f32.Pt(1, 10))
+	flecha.MoveTo(f32.Pt(3, 12))
+	flecha.LineTo(f32.Pt(5, 10))
+	paint.FillShape(gtx.Ops, colorIcono, clip.Stroke{Path: flecha.End(), Width: 2}.Op())
+	defer op.Offset(image.Pt(4, 0)).Push(gtx.Ops).Pop()
+	a.dibujarIconoPapeleraBase(gtx, colorIcono, fondo)
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoPlay(gtx layout.Context, colorIcono, _ color.NRGBA) layout.Dimensions {
+	base := image.Pt(16, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	var triangulo clip.Path
+	triangulo.Begin(gtx.Ops)
+	triangulo.MoveTo(f32.Pt(4, 2))
+	triangulo.LineTo(f32.Pt(13, 8))
+	triangulo.LineTo(f32.Pt(4, 14))
+	triangulo.Close()
+	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: triangulo.End()}.Op())
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoPause(gtx layout.Context, colorIcono, _ color.NRGBA) layout.Dimensions {
+	base := image.Pt(16, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(4, 2, 7, 14), 1).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(9, 2, 12, 14), 1).Op(gtx.Ops))
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoInicioReproductor(gtx layout.Context, colorIcono, _ color.NRGBA) layout.Dimensions {
+	base := image.Pt(16, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	paint.FillShape(gtx.Ops, colorIcono, clip.UniformRRect(image.Rect(3, 2, 5, 14), 1).Op(gtx.Ops))
+	var triangulo clip.Path
+	triangulo.Begin(gtx.Ops)
+	triangulo.MoveTo(f32.Pt(12, 2))
+	triangulo.LineTo(f32.Pt(5, 8))
+	triangulo.LineTo(f32.Pt(12, 14))
+	triangulo.Close()
+	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: triangulo.End()}.Op())
+	return layout.Dimensions{Size: objetivo}
 }
 
 func (a *Aplicacion) dibujarBloqueDirectorio(gtx layout.Context, rect image.Rectangle, colorIcono color.NRGBA) {

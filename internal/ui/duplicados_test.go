@@ -118,6 +118,14 @@ func TestAlternarColapsoGrupoDuplicadoConservaEstadoPorClave(t *testing.T) {
 	}
 }
 
+func TestAnchoPreviewGrupoDuplicadoUsaUnCuartoDelAncho(t *testing.T) {
+	t.Parallel()
+
+	if ancho := anchoPreviewGrupoDuplicado(1200); ancho != 300 {
+		t.Fatalf("ancho de preview inesperado: %d", ancho)
+	}
+}
+
 func TestResumenElementoDuplicadoIncluyeDimensionesEnDHashImagen(t *testing.T) {
 	t.Parallel()
 
