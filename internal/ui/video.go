@@ -46,6 +46,8 @@ type estadoReproductorVideo struct {
 func (a *Aplicacion) limpiarReproductorVideo() {
 	a.reproductorVideo = estadoReproductorVideo{}
 	a.controlProgresoVideo = widget.Float{}
+	a.controlExtraccionFrame = widget.Float{}
+	a.formatoExtraccionExpandido = false
 }
 
 func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
@@ -65,6 +67,8 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 			FotogramasPorSeg: 12,
 		}
 		a.controlProgresoVideo = widget.Float{}
+		a.controlExtraccionFrame = widget.Float{}
+		a.formatoExtraccionExpandido = false
 		return
 	}
 
@@ -92,7 +96,7 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 		a.reproductorVideo.TienePendiente = false
 		a.reproductorVideo.VersionSolicitud++
 	}
-	a.controlProgresoVideo.Value = a.valorProgresoVideo(a.reproductorVideo.Posicion, a.reproductorVideo.Duracion)
+	a.sincronizarControlesPosicionVideo()
 }
 
 func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo modelo.Archivo, maximoFotograma int) {
@@ -119,7 +123,7 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 				estado.Posicion = estado.Duracion
 				estado.Reproduciendo = false
 			}
-			a.controlProgresoVideo.Value = a.valorProgresoVideo(estado.Posicion, estado.Duracion)
+			a.sincronizarControlesPosicionVideo()
 		}
 		estado.UltimoTick = gtx.Now
 		a.aplicarFotogramaDisponible(estado.Posicion)
@@ -168,7 +172,7 @@ func (a *Aplicacion) reiniciarReproductorVideo() {
 	a.reproductorVideo.Fotogramas = nil
 	a.reproductorVideo.InicioBuffer = 0
 	a.reproductorVideo.FinBuffer = 0
-	a.controlProgresoVideo.Value = 0
+	a.sincronizarControlesPosicionVideo()
 	a.solicitarFotogramaVideo(a.archivoActivo, 0, maximo(960, a.reproductorVideo.MaximoFotograma))
 }
 
@@ -181,9 +185,26 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeControl(maximoFotograma int) {
 	a.reproductorVideo.Reproduciendo = false
 	a.reproductorVideo.UltimoTick = time.Time{}
 	a.reproductorVideo.Posicion = a.posicionDesdeProgresoVideo(a.controlProgresoVideo.Value, a.reproductorVideo.Duracion)
+	a.sincronizarControlesPosicionVideo()
 	if !a.aplicarFotogramaDisponible(a.reproductorVideo.Posicion) {
 		a.solicitarFotogramaVideo(a.archivoActivo, a.reproductorVideo.Posicion, maximoFotograma)
 	}
+}
+
+func (a *Aplicacion) actualizarPosicionVideoDesdeExtraccion(maximoFotograma int) {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+		return
+	}
+
+	a.sincronizarReproductorVideo(a.archivoActivo)
+	a.reproductorVideo.Reproduciendo = false
+	a.reproductorVideo.UltimoTick = time.Time{}
+	a.reproductorVideo.Posicion = a.posicionDesdeProgresoVideo(a.controlExtraccionFrame.Value, a.reproductorVideo.Duracion)
+	a.descartarBufferFotogramas()
+	a.sincronizarControlesPosicionVideo()
+	// Para que el frame exportado coincida con el visor, pedimos un fotograma
+	// puntual incluso si el buffer ya tiene uno aproximado cercano.
+	a.solicitarFotogramaVideo(a.archivoActivo, a.reproductorVideo.Posicion, maximoFotograma)
 }
 
 func (a *Aplicacion) solicitarFotogramaVideo(archivo modelo.Archivo, instante time.Duration, maximoFotograma int) {
@@ -197,7 +218,7 @@ func (a *Aplicacion) solicitarFotogramaVideo(archivo modelo.Archivo, instante ti
 	}
 
 	estado := &a.reproductorVideo
-	instante = normalizarInstanteVideo(instante, duracionMayor(archivo.Duracion, estado.Duracion))
+	instante = a.normalizarInstanteFotogramaVideo(instante, duracionMayor(archivo.Duracion, estado.Duracion))
 	if estado.Cargando {
 		estado.InstantePendiente = instante
 		estado.MaximoPendiente = maximoFotograma
@@ -270,7 +291,7 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 		fotogramasPorSeg = 12
 		estado.FotogramasPorSeg = fotogramasPorSeg
 	}
-	inicio = normalizarInstanteVideoConPaso(inicio, estado.Duracion, a.intervaloFotogramasBuffer())
+	inicio = a.normalizarInicioLoteVideo(inicio, estado.Duracion)
 	if a.bufferCubreInstante(inicio) && !a.debePrecargarSiguienteLote() {
 		return
 	}
@@ -438,13 +459,16 @@ func (a *Aplicacion) debePrecargarSiguienteLote() bool {
 	if len(estado.Fotogramas) == 0 {
 		return true
 	}
+	if estado.Duracion > 0 && estado.FinBuffer >= estado.Duracion-a.margenFinalLoteVideo() {
+		return false
+	}
 	return estado.FinBuffer-estado.Posicion <= a.margenPrecargaBuffer()
 }
 
 func (a *Aplicacion) inicioSiguienteLote() time.Duration {
 	estado := &a.reproductorVideo
 	if len(estado.Fotogramas) == 0 {
-		return estado.Posicion
+		return a.normalizarInicioLoteVideo(estado.Posicion, estado.Duracion)
 	}
 	inicio := estado.FinBuffer - a.solapeLoteBuffer()
 	if inicio < estado.Posicion {
@@ -453,7 +477,7 @@ func (a *Aplicacion) inicioSiguienteLote() time.Duration {
 	if inicio < 0 {
 		return 0
 	}
-	return inicio
+	return a.normalizarInicioLoteVideo(inicio, estado.Duracion)
 }
 
 func (a *Aplicacion) intervaloFotogramasBuffer() time.Duration {
@@ -498,6 +522,65 @@ func (a *Aplicacion) solapeLoteBuffer() time.Duration {
 		solape = 1200 * time.Millisecond
 	}
 	return solape
+}
+
+func (a *Aplicacion) sincronizarControlesPosicionVideo() {
+	valor := a.valorProgresoVideo(a.reproductorVideo.Posicion, a.reproductorVideo.Duracion)
+	a.controlProgresoVideo.Value = valor
+	if !a.controlExtraccionFrame.Dragging() {
+		a.controlExtraccionFrame.Value = valor
+	}
+}
+
+func (a *Aplicacion) normalizarInicioLoteVideo(inicio, duracion time.Duration) time.Duration {
+	paso := a.intervaloFotogramasBuffer()
+	inicio = normalizarInstanteVideoConPaso(inicio, duracion, paso)
+	if duracion <= 0 {
+		return inicio
+	}
+
+	ultimoInicio := duracion - a.margenFinalLoteVideo()
+	if ultimoInicio < 0 {
+		ultimoInicio = 0
+	}
+	if inicio > ultimoInicio {
+		inicio = ultimoInicio
+	}
+	return normalizarInstanteVideoConPaso(inicio, duracion, paso)
+}
+
+func (a *Aplicacion) normalizarInstanteFotogramaVideo(instante, duracion time.Duration) time.Duration {
+	instante = normalizarInstanteVideo(instante, duracion)
+	if duracion <= 0 {
+		return instante
+	}
+
+	margen := maximoDuracion(160*time.Millisecond, a.intervaloFotogramasBuffer()*2)
+	if margen > duracion {
+		margen = duracion
+	}
+	ultimoInstante := duracion - margen
+	if ultimoInstante < 0 {
+		ultimoInstante = 0
+	}
+	if instante > ultimoInstante {
+		instante = ultimoInstante
+	}
+	return normalizarInstanteVideoConPaso(instante, duracion, a.intervaloFotogramasBuffer())
+}
+
+func (a *Aplicacion) margenFinalLoteVideo() time.Duration {
+	margen := maximoDuracion(400*time.Millisecond, a.intervaloFotogramasBuffer()*4)
+	if a.reproductorVideo.Duracion > 0 && margen > a.reproductorVideo.Duracion {
+		return a.reproductorVideo.Duracion
+	}
+	return margen
+}
+
+func (a *Aplicacion) descartarBufferFotogramas() {
+	a.reproductorVideo.Fotogramas = nil
+	a.reproductorVideo.InicioBuffer = 0
+	a.reproductorVideo.FinBuffer = 0
 }
 
 func (a *Aplicacion) valorProgresoVideo(posicion, duracion time.Duration) float32 {
@@ -565,6 +648,19 @@ func diferenciaDuracion(izquierda, derecha time.Duration) time.Duration {
 		return -diferencia
 	}
 	return diferencia
+}
+
+func (a *Aplicacion) instanteExtraerFrameActivo() time.Duration {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+		return 0
+	}
+	if a.reproductorVideo.Ruta != a.archivoActivo.Ruta {
+		return 0
+	}
+	if a.reproductorVideo.Fotograma != nil && diferenciaDuracion(a.reproductorVideo.InstanteFotograma, a.reproductorVideo.Posicion) <= 200*time.Millisecond {
+		return a.reproductorVideo.InstanteFotograma
+	}
+	return a.reproductorVideo.Posicion
 }
 
 func duracionMayor(izquierda, derecha time.Duration) time.Duration {

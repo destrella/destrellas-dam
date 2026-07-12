@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"destrellas-dam/internal/modelo"
 )
@@ -138,5 +139,36 @@ func crearJPEGPrueba(t *testing.T, ruta string) {
 
 	if err := jpeg.Encode(archivo, imagen, &jpeg.Options{Quality: 90}); err != nil {
 		t.Fatalf("no se pudo codificar el JPEG de prueba: %v", err)
+	}
+}
+
+func TestConstruirRutaSalidaFrameIncluyeNumeroYFormato(t *testing.T) {
+	t.Parallel()
+
+	ruta := construirRutaSalidaFrame("/tmp/video original.mov", "jpg", 42)
+	esperada := "/tmp/video original-frame-000042.jpg"
+	if ruta != esperada {
+		t.Fatalf("ruta inesperada: %q", ruta)
+	}
+}
+
+func TestParsearTasaFotogramas(t *testing.T) {
+	t.Parallel()
+
+	valor, err := parsearTasaFotogramas("30000/1001")
+	if err != nil {
+		t.Fatalf("parsearTasaFotogramas devolvió error: %v", err)
+	}
+	if valor < 29.96 || valor > 29.98 {
+		t.Fatalf("fps inesperado: %.6f", valor)
+	}
+}
+
+func TestNumeroFotogramaAproximado(t *testing.T) {
+	t.Parallel()
+
+	numero := numeroFotogramaAproximado(2*time.Second, 29.97)
+	if numero != 60 {
+		t.Fatalf("número de frame inesperado: %d", numero)
 	}
 }

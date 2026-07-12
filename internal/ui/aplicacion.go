@@ -258,19 +258,22 @@ type Aplicacion struct {
 	formularioMetadatos     estadoFormularioMetadatos
 
 	// Vista de elemento único.
-	botonVisorAnterior   widget.Clickable
-	botonVisorSiguiente  widget.Clickable
-	botonAgregarRegion   widget.Clickable
-	botonLimpiarRegiones widget.Clickable
-	botonGuardarRegiones widget.Clickable
-	botonRecortar        widget.Clickable
-	botonConvertir       widget.Clickable
-	botonExtraerFrame    widget.Clickable
-	botonOptimizarVideo  widget.Clickable
-	editorFormatoImagen  widget.Editor
-	editorSelectorFrame  widget.Editor
-	editorFormatoFrame   widget.Editor
-	sobreescribirVideo   widget.Bool
+	botonVisorAnterior             widget.Clickable
+	botonVisorSiguiente            widget.Clickable
+	botonAgregarRegion             widget.Clickable
+	botonLimpiarRegiones           widget.Clickable
+	botonGuardarRegiones           widget.Clickable
+	botonRecortar                  widget.Clickable
+	botonConvertir                 widget.Clickable
+	botonExtraerFrame              widget.Clickable
+	botonOptimizarVideo            widget.Clickable
+	editorFormatoImagen            widget.Editor
+	sobreescribirVideo             widget.Bool
+	controlExtraccionFrame         widget.Float
+	formatoExtraccionFrame         string
+	formatoExtraccionExpandido     bool
+	botonSelectorFormatoExtraccion widget.Clickable
+	opcionesFormatoExtraccion      map[string]*widget.Clickable
 
 	// Vista de duplicados.
 	editorRutaEscaneoDuplicados widget.Editor
@@ -390,10 +393,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorSoftware.SingleLine = true
 	appUI.editorFormatoImagen.SingleLine = true
 	appUI.editorFormatoImagen.SetText("webp")
-	appUI.editorSelectorFrame.SingleLine = true
-	appUI.editorSelectorFrame.SetText("50%")
-	appUI.editorFormatoFrame.SingleLine = true
-	appUI.editorFormatoFrame.SetText("png")
+	appUI.formatoExtraccionFrame = "webp"
 	appUI.editorFiltroEtiquetas.SingleLine = true
 	appUI.editorFiltroLugares.SingleLine = true
 	appUI.editorFiltroUbicaciones.SingleLine = true
@@ -1564,24 +1564,31 @@ func (a *Aplicacion) convertirImagenActiva() {
 }
 
 func (a *Aplicacion) extraerFrameActivo() {
-	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo {
+	if !a.tieneArchivoActivo || a.archivoActivo.Tipo != modelo.TipoVideo || a.servicioMetadatos == nil {
 		return
 	}
-	formato := strings.TrimSpace(a.editorFormatoFrame.Text())
-	if formato == "" {
-		formato = "png"
-	}
-	selector := strings.TrimSpace(a.editorSelectorFrame.Text())
-	salida := rutaDerivada(a.archivoActivo.Ruta, "frame", "."+strings.TrimPrefix(formato, "."))
+
+	a.sincronizarReproductorVideo(a.archivoActivo)
+	archivo := a.archivoActivo
+	formato := a.formatoExtraccionFrameNormalizado()
+	instante := a.instanteExtraerFrameActivo()
+	rotacion := modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
 
 	go func() {
-		err := a.servicioMetadatos.ExtraerFrame(context.Background(), a.archivoActivo.Ruta, selector, formato, salida)
+		resultado, err := a.servicioMetadatos.ExtraerFrameEnInstante(context.Background(), archivo.Ruta, instante, formato, rotacion)
 		a.encolarActualizacion(func() {
 			if err != nil {
+				if strings.TrimSpace(resultado.Ruta) != "" {
+					if _, errStat := os.Stat(resultado.Ruta); errStat == nil {
+						a.establecerEstado("Frame extraído con incidencias al copiar metadatos", err)
+						a.reiniciarListado()
+						return
+					}
+				}
 				a.establecerEstado("No se pudo extraer el frame del video", err)
 				return
 			}
-			a.establecerEstado("Frame extraído correctamente", nil)
+			a.establecerEstado(fmt.Sprintf("Frame %d extraído correctamente", resultado.Numero), nil)
 			a.reiniciarListado()
 		})
 	}()

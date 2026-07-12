@@ -1469,8 +1469,6 @@ func (a *Aplicacion) hayEditorEditableEnFoco(gtx layout.Context) bool {
 		&a.editorModelo,
 		&a.editorSoftware,
 		&a.editorFormatoImagen,
-		&a.editorSelectorFrame,
-		&a.editorFormatoFrame,
 		&a.edicionRegiones.EditorNombre,
 	}
 	for _, editor := range editores {
@@ -1679,21 +1677,11 @@ func (a *Aplicacion) dibujarAccionesTipo(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.dibujarEditorCampo(gtx, "Frame (% o timestamp)", &a.editorSelectorFrame)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.dibujarEditorCampo(gtx, "Formato del frame", &a.editorFormatoFrame)
+				return a.dibujarBloqueExtraerFrame(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return material.CheckBox(a.tema, &a.sobreescribirVideo, "Sobrescribir al optimizar").Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.dibujarBotonAccion(gtx, &a.botonExtraerFrame, "Extraer frame", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
-					a.extraerFrameActivo()
-				})
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {

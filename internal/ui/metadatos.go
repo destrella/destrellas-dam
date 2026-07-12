@@ -866,7 +866,10 @@ func (a *Aplicacion) dibujarBloqueRecorteImagen(gtx layout.Context) layout.Dimen
 }
 
 func (a *Aplicacion) dibujarBloqueExtraerFrame(gtx layout.Context) layout.Dimensions {
-	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
+	valorAntes := a.controlExtraccionFrame.Value
+	maximoFotograma := maximo(960, a.reproductorVideo.MaximoFotograma)
+
+	dim := dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -874,13 +877,24 @@ func (a *Aplicacion) dibujarBloqueExtraerFrame(gtx layout.Context) layout.Dimens
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarEditorCampo(gtx, "Frame (% o timestamp)", &a.editorSelectorFrame)
+					return a.dibujarTextoSecundario(gtx, "El deslizador sincroniza la vista previa con el frame que se exportará.")
 				}),
-				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarEditorCampo(gtx, "Formato del frame", &a.editorFormatoFrame)
+					deslizador := material.Slider(a.tema, &a.controlExtraccionFrame)
+					deslizador.Axis = layout.Horizontal
+					deslizador.Color = a.paleta.Acento
+					return deslizador.Layout(gtx)
 				}),
-				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoSecundario(gtx, a.descripcionExtraccionFrame())
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarSelectorFormatoExtraccion(gtx)
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return a.dibujarBotonAccion(gtx, &a.botonExtraerFrame, "Extraer frame", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
 						a.extraerFrameActivo()
@@ -889,6 +903,88 @@ func (a *Aplicacion) dibujarBloqueExtraerFrame(gtx layout.Context) layout.Dimens
 			)
 		})
 	})
+
+	if valorAntes != a.controlExtraccionFrame.Value {
+		a.actualizarPosicionVideoDesdeExtraccion(maximoFotograma)
+	}
+	return dim
+}
+
+func (a *Aplicacion) descripcionExtraccionFrame() string {
+	porcentaje := float64(a.controlExtraccionFrame.Value) * 100
+	if a.reproductorVideo.Duracion <= 0 {
+		return fmt.Sprintf("%.0f%%", porcentaje)
+	}
+	return fmt.Sprintf("%.0f%% | %s de %s", porcentaje, formatearDuracion(a.reproductorVideo.Posicion), formatearDuracion(a.reproductorVideo.Duracion))
+}
+
+func (a *Aplicacion) dibujarSelectorFormatoExtraccion(gtx layout.Context) layout.Dimensions {
+	formato := a.formatoExtraccionFrameNormalizado()
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarTextoSecundario(gtx, "Formato del frame")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonAccion(gtx, &a.botonSelectorFormatoExtraccion, etiquetaFormatoExtraccion(formato), a.paleta.Panel, a.paleta.Texto, func() {
+				a.formatoExtraccionExpandido = !a.formatoExtraccionExpandido
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !a.formatoExtraccionExpandido {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
+					return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						opciones := []string{"webp", "png", "jpg"}
+						hijos := make([]layout.FlexChild, 0, len(opciones)*2)
+						for indice, opcion := range opciones {
+							opcion := opcion
+							hijos = append(hijos, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarBotonNavegacion(gtx, a.asegurarOpcionFormatoExtraccion(opcion), etiquetaFormatoExtraccion(opcion), opcion == formato, func() {
+									a.formatoExtraccionFrame = opcion
+									a.formatoExtraccionExpandido = false
+								})
+							}))
+							if indice < len(opciones)-1 {
+								hijos = append(hijos, layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout))
+							}
+						}
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx, hijos...)
+					})
+				})
+			})
+		}),
+	)
+}
+
+func (a *Aplicacion) asegurarOpcionFormatoExtraccion(clave string) *widget.Clickable {
+	if a.opcionesFormatoExtraccion == nil {
+		a.opcionesFormatoExtraccion = make(map[string]*widget.Clickable)
+	}
+	if clic, existe := a.opcionesFormatoExtraccion[clave]; existe {
+		return clic
+	}
+	clic := &widget.Clickable{}
+	a.opcionesFormatoExtraccion[clave] = clic
+	return clic
+}
+
+func (a *Aplicacion) formatoExtraccionFrameNormalizado() string {
+	switch strings.ToLower(strings.TrimSpace(a.formatoExtraccionFrame)) {
+	case "png":
+		return "png"
+	case "jpg", "jpeg":
+		return "jpg"
+	default:
+		return "webp"
+	}
+}
+
+func etiquetaFormatoExtraccion(formato string) string {
+	return strings.ToUpper(strings.TrimPrefix(strings.TrimSpace(formato), "."))
 }
 
 func (a *Aplicacion) dibujarBloqueOptimizarVideo(gtx layout.Context) layout.Dimensions {

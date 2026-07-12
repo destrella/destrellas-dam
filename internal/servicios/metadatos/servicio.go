@@ -47,6 +47,13 @@ type FotogramaVideo struct {
 	Imagen   image.Image
 }
 
+// ResultadoExtraccionFrame resume el archivo generado al extraer un frame.
+type ResultadoExtraccionFrame struct {
+	Ruta     string
+	Numero   int
+	Instante time.Duration
+}
+
 // NuevoServicio descubre las herramientas disponibles sin hacer obligatoria ninguna.
 func NuevoServicio() *Servicio {
 	return &Servicio{
@@ -402,18 +409,42 @@ func (s *Servicio) ExtraerFrame(ctx context.Context, origen, selector, formato, 
 	}
 
 	destino := salidaEnFormato(salida, formato)
-	comando := exec.CommandContext(ctx, s.rutaFFmpeg,
-		"-hide_banner", "-loglevel", "error",
-		"-ss", marcaTiempo,
-		"-i", origen,
-		"-frames:v", "1",
-		"-y",
-		destino,
-	)
-	if salidaComando, err := comando.CombinedOutput(); err != nil {
-		return fmt.Errorf("no se pudo extraer el frame: %w: %s", err, strings.TrimSpace(string(salidaComando)))
+	instante, err := strconv.ParseFloat(marcaTiempo, 64)
+	if err != nil {
+		return fmt.Errorf("no se pudo interpretar el instante del frame: %w", err)
 	}
-	return nil
+	return s.extraerFrameEnRutaConFormato(ctx, origen, time.Duration(instante*float64(time.Second)), destino, 0, normalizarFormatoFrameSalida(formato))
+}
+
+// ExtraerFrameEnInstante exporta un frame concreto del video, nombra el
+// archivo con su número aproximado y copia los metadatos editables del original.
+func (s *Servicio) ExtraerFrameEnInstante(ctx context.Context, origen string, instante time.Duration, formato string, rotacion int) (ResultadoExtraccionFrame, error) {
+	if s.rutaFFmpeg == "" {
+		return ResultadoExtraccionFrame{}, errors.New("ffmpeg no esta disponible")
+	}
+
+	formato = normalizarFormatoFrameSalida(formato)
+	if instante < 0 {
+		instante = 0
+	}
+
+	numero, errNumero := s.numeroFotogramaVideo(ctx, origen, instante)
+	if errNumero != nil {
+		numero = numeroFotogramaAproximado(instante, 30)
+	}
+
+	resultado := ResultadoExtraccionFrame{
+		Ruta:     construirRutaSalidaFrame(origen, formato, numero),
+		Numero:   numero,
+		Instante: instante,
+	}
+	if err := s.extraerFrameEnRutaConFormato(ctx, origen, instante, resultado.Ruta, rotacion, formato); err != nil {
+		return resultado, err
+	}
+	if err := s.copiarMetadatosArchivoAFrame(ctx, origen, resultado.Ruta); err != nil {
+		return resultado, err
+	}
+	return resultado, nil
 }
 
 // OptimizarVideoWeb recodifica el video a H.264/AAC con faststart para web.
@@ -813,6 +844,183 @@ func (s *Servicio) resolverSelectorFrame(ctx context.Context, ruta, selector str
 		return "0", nil
 	}
 	return selector, nil
+}
+
+func (s *Servicio) extraerFrameEnRutaConFormato(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int, formato string) error {
+	formato = normalizarFormatoFrameSalida(formato)
+	destino = salidaEnFormato(destino, formato)
+
+	if formato == "webp" && s.rutaMagick != "" {
+		return s.extraerFrameWebPConRespaldo(ctx, origen, instante, destino, rotacion)
+	}
+
+	if err := s.extraerFrameEnRuta(ctx, origen, instante, destino, rotacion); err != nil {
+		if formato == "webp" && s.rutaMagick == "" {
+			return fmt.Errorf("%w. Este ffmpeg no parece incluir encoder WebP y tampoco hay ImageMagick disponible para usar un respaldo", err)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Servicio) extraerFrameWebPConRespaldo(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int) error {
+	directorioTemporal, err := os.MkdirTemp("", "destrellas-dam-frame-webp-*")
+	if err != nil {
+		return fmt.Errorf("no se pudo preparar el directorio temporal para WebP: %w", err)
+	}
+	defer os.RemoveAll(directorioTemporal)
+
+	intermedioPNG := filepath.Join(directorioTemporal, "frame.png")
+	if err := s.extraerFrameEnRuta(ctx, origen, instante, intermedioPNG, rotacion); err != nil {
+		return err
+	}
+	if err := s.ConvertirImagen(ctx, intermedioPNG, "webp", destino); err != nil {
+		return fmt.Errorf("no se pudo convertir el frame extraído a WebP: %w", err)
+	}
+	return nil
+}
+
+func (s *Servicio) extraerFrameEnRuta(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int) error {
+	argumentos := []string{
+		"-hide_banner", "-loglevel", "error",
+		"-noautorotate",
+		"-ss", fmt.Sprintf("%.3f", instante.Seconds()),
+		"-i", origen,
+		"-frames:v", "1",
+	}
+	if filtroRotacion := filtroRotacionVideo(rotacion); filtroRotacion != "" {
+		argumentos = append(argumentos, "-vf", filtroRotacion)
+	}
+	argumentos = append(argumentos, "-y", destino)
+
+	comando := exec.CommandContext(ctx, s.rutaFFmpeg, argumentos...)
+	if salidaComando, err := comando.CombinedOutput(); err != nil {
+		return fmt.Errorf("no se pudo extraer el frame: %w: %s", err, strings.TrimSpace(string(salidaComando)))
+	}
+	return nil
+}
+
+func (s *Servicio) copiarMetadatosArchivoAFrame(ctx context.Context, origen, destino string) error {
+	if s.rutaExiftool == "" {
+		return errors.New("exiftool no esta disponible para copiar metadatos al frame")
+	}
+
+	archivo, err := s.analizarConExiftool(ctx, modelo.Archivo{
+		Ruta: origen,
+		Tipo: modelo.TipoVideo,
+	})
+	if err != nil {
+		return fmt.Errorf("no se pudieron leer los metadatos del archivo original: %w", err)
+	}
+
+	metadatos := archivo.Metadatos
+	// El frame exportado ya queda con la orientación visual correcta, así que
+	// evitamos propagar rotaciones u orientaciones del video original.
+	metadatos.Orientacion = 0
+	metadatos.Rotacion = 0
+	metadatos.Regiones = nil
+	return s.GuardarMetadatos(ctx, destino, metadatos)
+}
+
+func (s *Servicio) numeroFotogramaVideo(ctx context.Context, ruta string, instante time.Duration) (int, error) {
+	fotogramasPorSegundo, err := s.fotogramasPorSegundoVideo(ctx, ruta)
+	if err != nil {
+		return 0, err
+	}
+	return numeroFotogramaAproximado(instante, fotogramasPorSegundo), nil
+}
+
+func (s *Servicio) fotogramasPorSegundoVideo(ctx context.Context, ruta string) (float64, error) {
+	if s.rutaFFprobe == "" {
+		return 0, errors.New("ffprobe no esta disponible")
+	}
+
+	comando := exec.CommandContext(ctx, s.rutaFFprobe,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=avg_frame_rate",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		ruta,
+	)
+	salida, err := comando.Output()
+	if err != nil {
+		return 0, fmt.Errorf("no se pudo obtener la tasa de fotogramas del video: %w", err)
+	}
+
+	fotogramasPorSegundo, err := parsearTasaFotogramas(strings.TrimSpace(string(salida)))
+	if err != nil {
+		return 0, err
+	}
+	if fotogramasPorSegundo <= 0 {
+		return 0, errors.New("la tasa de fotogramas del video no es válida")
+	}
+	return fotogramasPorSegundo, nil
+}
+
+func parsearTasaFotogramas(texto string) (float64, error) {
+	texto = strings.TrimSpace(texto)
+	if texto == "" {
+		return 0, errors.New("la tasa de fotogramas está vacía")
+	}
+
+	if strings.Contains(texto, "/") {
+		partes := strings.SplitN(texto, "/", 2)
+		if len(partes) != 2 {
+			return 0, fmt.Errorf("tasa de fotogramas inválida: %q", texto)
+		}
+		numerador, err := strconv.ParseFloat(strings.TrimSpace(partes[0]), 64)
+		if err != nil {
+			return 0, fmt.Errorf("numerador de fps inválido: %w", err)
+		}
+		denominador, err := strconv.ParseFloat(strings.TrimSpace(partes[1]), 64)
+		if err != nil {
+			return 0, fmt.Errorf("denominador de fps inválido: %w", err)
+		}
+		if denominador == 0 {
+			return 0, errors.New("el denominador de fps no puede ser cero")
+		}
+		return numerador / denominador, nil
+	}
+
+	valor, err := strconv.ParseFloat(texto, 64)
+	if err != nil {
+		return 0, fmt.Errorf("tasa de fotogramas inválida: %w", err)
+	}
+	return valor, nil
+}
+
+func numeroFotogramaAproximado(instante time.Duration, fotogramasPorSegundo float64) int {
+	if instante < 0 {
+		instante = 0
+	}
+	if fotogramasPorSegundo <= 0 {
+		fotogramasPorSegundo = 30
+	}
+	numero := int(math.Round(instante.Seconds() * fotogramasPorSegundo))
+	if numero < 0 {
+		return 0
+	}
+	return numero
+}
+
+func construirRutaSalidaFrame(origen, formato string, numero int) string {
+	formato = normalizarFormatoFrameSalida(formato)
+	base := strings.TrimSuffix(origen, filepath.Ext(origen))
+	if numero < 0 {
+		numero = 0
+	}
+	return fmt.Sprintf("%s-frame-%06d.%s", base, numero, formato)
+}
+
+func normalizarFormatoFrameSalida(formato string) string {
+	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(formato), ".")) {
+	case "png":
+		return "png"
+	case "jpg", "jpeg":
+		return "jpg"
+	default:
+		return "webp"
+	}
 }
 
 func (s *Servicio) duracionVideo(ctx context.Context, ruta string) (float64, error) {
