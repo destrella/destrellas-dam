@@ -26,6 +26,7 @@ type OpcionesDescubrimiento struct {
 	CalcularHashesParciales bool
 	ConcurrenciaAnalisis    int
 	SoloMultimedia          bool
+	IgnorarArchivosVacios   bool
 	RutasExcluidas          []string
 }
 
@@ -221,6 +222,18 @@ func (s *Servicio) ejecutarDescubrimiento(ctx context.Context, raiz string, opci
 				if opciones.SoloMultimedia && !archivo.EsDirectorio && !archivo.EsMultimedia() {
 					continue
 				}
+				if debeIgnorarArchivoVacio(archivo, opciones) {
+					if err := s.repo.EliminarArchivo(ctx, archivo.Ruta); err != nil {
+						emitir(EventoProgreso{
+							RutaActual:            archivo.Ruta,
+							DirectoriosProcesados: directoriosProcesados.Load(),
+							ArchivosEncontrados:   archivosEncontrados.Load(),
+							ArchivosAnalizados:    archivosAnalizados.Load(),
+							Error:                 err,
+						})
+					}
+					continue
+				}
 				if err := s.repo.GuardarArchivo(ctx, archivo); err != nil {
 					emitir(EventoProgreso{
 						RutaActual:            archivo.Ruta,
@@ -297,6 +310,16 @@ func rutaEstaExcluida(ruta string, rutasExcluidas []string) bool {
 		}
 	}
 	return false
+}
+
+func debeIgnorarArchivoVacio(archivo modelo.Archivo, opciones OpcionesDescubrimiento) bool {
+	if !opciones.IgnorarArchivosVacios {
+		return false
+	}
+	if archivo.EsDirectorio {
+		return false
+	}
+	return archivo.Tamano <= 0
 }
 
 func (s *Servicio) calcularHashesExactos(ruta string) (modelo.HashesArchivo, error) {

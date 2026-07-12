@@ -14,7 +14,9 @@ type Repositorio interface {
 	ObtenerArchivoPorRuta(ctx context.Context, ruta string) (modelo.Archivo, error)
 	ListarPalabrasClave(ctx context.Context, limite int) ([]string, error)
 	ListarEtiquetas(ctx context.Context, limite int) ([]string, error)
+	BuscarEtiquetas(ctx context.Context, consulta string, limite int) ([]string, error)
 	ListarUbicaciones(ctx context.Context, limite int) ([]string, error)
+	BuscarUbicaciones(ctx context.Context, consulta string, limite int) ([]string, error)
 	ListarUbicacionesGuardadas(ctx context.Context, limite int) ([]modelo.UbicacionGuardada, error)
 	ListarUsosUbicacionGuardada(ctx context.Context, nombre string, limite int) ([]modelo.UsoUbicacionGuardada, error)
 	GuardarRelacionUbicacion(ctx context.Context, origen, destino string) error

@@ -29,6 +29,7 @@ func (s *Servicio) IniciarDescubrimientoLocal(ctx context.Context, raiz string, 
 		CalcularHashesExactos:   true,
 		CalcularHashesParciales: true,
 		SoloMultimedia:          true,
+		IgnorarArchivosVacios:   true,
 		RutasExcluidas:          append([]string(nil), rutasExcluidas...),
 	})
 }

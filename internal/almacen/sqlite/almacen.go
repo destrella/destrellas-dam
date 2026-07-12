@@ -248,6 +248,51 @@ LIMIT ?`, limite)
 	return etiquetas, filas.Err()
 }
 
+// BuscarEtiquetas busca coincidencias por texto directamente en la base para no
+// depender del subconjunto visible ya cargado en memoria.
+func (a *Almacen) BuscarEtiquetas(ctx context.Context, consulta string, limite int) ([]string, error) {
+	if err := a.asegurarIndiceEtiquetas(ctx); err != nil {
+		return nil, err
+	}
+	consulta = strings.TrimSpace(consulta)
+	if consulta == "" {
+		return nil, nil
+	}
+	if limite < 1 {
+		limite = 100
+	}
+
+	filas, err := a.base.QueryContext(ctx, `
+SELECT etiqueta
+FROM (
+	SELECT etiqueta AS etiqueta
+	FROM etiquetas
+	WHERE INSTR(LOWER(etiqueta), LOWER(?)) > 0
+	UNION ALL
+	SELECT palabra AS etiqueta
+	FROM palabras_clave
+	WHERE INSTR(LOWER(palabra), LOWER(?)) > 0
+)
+GROUP BY etiqueta
+ORDER BY COUNT(*) DESC, etiqueta COLLATE NOCASE ASC, etiqueta ASC
+LIMIT ?`, consulta, consulta, limite)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudieron buscar las etiquetas: %w", err)
+	}
+	defer filas.Close()
+
+	var etiquetas []string
+	for filas.Next() {
+		var etiqueta string
+		if err := filas.Scan(&etiqueta); err != nil {
+			return nil, fmt.Errorf("no se pudo leer una etiqueta buscada: %w", err)
+		}
+		etiquetas = append(etiquetas, etiqueta)
+	}
+
+	return etiquetas, filas.Err()
+}
+
 // ListarUbicaciones devuelve ubicaciones nombradas conocidas.
 func (a *Almacen) ListarUbicaciones(ctx context.Context, limite int) ([]string, error) {
 	if limite < 1 {
@@ -272,6 +317,43 @@ LIMIT ?`, limite)
 		var ubicacion string
 		if err := filas.Scan(&ubicacion); err != nil {
 			return nil, fmt.Errorf("no se pudo leer una ubicacion: %w", err)
+		}
+		ubicaciones = append(ubicaciones, ubicacion)
+	}
+
+	return ubicaciones, filas.Err()
+}
+
+// BuscarUbicaciones consulta la base por coincidencias de Location sin
+// depender del límite usado por la colección visible.
+func (a *Almacen) BuscarUbicaciones(ctx context.Context, consulta string, limite int) ([]string, error) {
+	consulta = strings.TrimSpace(consulta)
+	if consulta == "" {
+		return nil, nil
+	}
+	if limite < 1 {
+		limite = 100
+	}
+
+	filas, err := a.base.QueryContext(ctx, `
+SELECT ubicacion
+FROM archivos
+WHERE TRIM(ubicacion) <> ''
+	AND es_directorio = 0
+	AND INSTR(LOWER(ubicacion), LOWER(?)) > 0
+GROUP BY ubicacion
+ORDER BY COUNT(*) DESC, ubicacion COLLATE NOCASE ASC, ubicacion ASC
+LIMIT ?`, consulta, limite)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudieron buscar las ubicaciones: %w", err)
+	}
+	defer filas.Close()
+
+	var ubicaciones []string
+	for filas.Next() {
+		var ubicacion string
+		if err := filas.Scan(&ubicacion); err != nil {
+			return nil, fmt.Errorf("no se pudo leer una ubicación buscada: %w", err)
 		}
 		ubicaciones = append(ubicaciones, ubicacion)
 	}
@@ -495,6 +577,7 @@ WITH grupos AS (
 		MIN(origen) AS origen_min
 	FROM archivos
 	WHERE es_directorio = 0
+		AND tamano > 0
 		AND %s <> ''
 		%s
 	GROUP BY clave
@@ -556,6 +639,7 @@ SELECT %s AS clave_duplicado,
 	tiene_gps, tiene_regiones, tiene_where_froms, tiene_ia, tiene_social, es_adulto, ubicacion, where_froms
 FROM archivos
 WHERE es_directorio = 0
+	AND tamano > 0
 	AND %s IN (%s)
 ORDER BY clave_duplicado ASC, modificado_unix ASC, nombre ASC`, claveExpr, claveExpr, strings.Join(marcadores, ", "))
 
