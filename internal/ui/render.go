@@ -99,6 +99,9 @@ func (a *Aplicacion) dibujarBarraSuperior(gtx layout.Context) layout.Dimensions 
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaDuplicados, "Duplicados", a.vistaActual == vistaDuplicados, func() {
 								a.vistaActual = vistaDuplicados
+								if !a.duplicadosInicializados {
+									a.recargarDuplicados()
+								}
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
@@ -188,6 +191,10 @@ func (a *Aplicacion) dibujarVistaElementoUnico(gtx layout.Context) layout.Dimens
 }
 
 func (a *Aplicacion) dibujarVistaDuplicados(gtx layout.Context) layout.Dimensions {
+	if !a.duplicadosInicializados && !a.cargandoDuplicados {
+		a.recargarDuplicados()
+	}
+
 	izquierda := maximo(250, gtx.Dp(unit.Dp(260)))
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1698,56 +1705,65 @@ func (a *Aplicacion) dibujarAccionesTipo(gtx layout.Context) layout.Dimensions {
 }
 
 func (a *Aplicacion) dibujarControlesDuplicados(gtx layout.Context) layout.Dimensions {
+	etiquetaRecarga := "Recargar"
+	if a.cargandoDuplicados {
+		etiquetaRecarga = "Actualizando..."
+	}
+
+	controles := []layout.Widget{
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaExacta, "Exacta", a.tipoCoincidenciaActual == modelo.CoincidenciaExacta, modelo.CoincidenciaExacta)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaImagen, "dHash imagen", a.tipoCoincidenciaActual == modelo.CoincidenciaParcialImagen, modelo.CoincidenciaParcialImagen)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaVideo, "dHash video", a.tipoCoincidenciaActual == modelo.CoincidenciaParcialVideo, modelo.CoincidenciaParcialVideo)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonOrden(gtx, &a.botonOrdenGrupo, "Por grupo", a.ordenDuplicados == modelo.OrdenPorTamanoGrupo, modelo.OrdenPorTamanoGrupo)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonOrden(gtx, &a.botonOrdenEspacio, "Por espacio", a.ordenDuplicados == modelo.OrdenPorEspacioRecuperado, modelo.OrdenPorEspacioRecuperado)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonOrden(gtx, &a.botonOrdenAlfabetico, "A-Z", a.ordenDuplicados == modelo.OrdenAlfabetico, modelo.OrdenAlfabetico)
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonAccion(gtx, &a.botonRecargarDuplicados, etiquetaRecarga, a.paleta.PanelElevado, a.paleta.Texto, func() {
+				a.recargarDuplicados()
+			})
+		},
+		func(gtx layout.Context) layout.Dimensions {
+			return material.CheckBox(a.tema, &a.soloDuplicadosMultimedia, "Solo grupos multimedia").Layout(gtx)
+		},
+	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaExacta, "Exacta", a.tipoCoincidenciaActual == modelo.CoincidenciaExacta, modelo.CoincidenciaExacta)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaImagen, "dHash imagen", a.tipoCoincidenciaActual == modelo.CoincidenciaParcialImagen, modelo.CoincidenciaParcialImagen)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonCategoriaCoincidencia(gtx, &a.botonCoincidenciaVideo, "dHash video", a.tipoCoincidenciaActual == modelo.CoincidenciaParcialVideo, modelo.CoincidenciaParcialVideo)
-				}),
-			)
+			return a.dibujarFlujoControles(gtx, controles)
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonOrden(gtx, &a.botonOrdenGrupo, "Por grupo", a.ordenDuplicados == modelo.OrdenPorTamanoGrupo, modelo.OrdenPorTamanoGrupo)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonOrden(gtx, &a.botonOrdenEspacio, "Por espacio", a.ordenDuplicados == modelo.OrdenPorEspacioRecuperado, modelo.OrdenPorEspacioRecuperado)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonOrden(gtx, &a.botonOrdenAlfabetico, "A-Z", a.ordenDuplicados == modelo.OrdenAlfabetico, modelo.OrdenAlfabetico)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarBotonAccion(gtx, &a.botonRecargarDuplicados, "Recargar", a.paleta.PanelElevado, a.paleta.Texto, func() {
-						a.recargarDuplicados()
-					})
-				}),
-			)
+			if !a.cargandoDuplicados {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return a.dibujarTextoSecundario(gtx, "Actualizando grupos de duplicados...")
+			})
 		}),
 	)
 }
 
 func (a *Aplicacion) dibujarListaDuplicados(gtx layout.Context) layout.Dimensions {
-	if len(a.gruposDuplicados) == 0 {
+	grupos := a.gruposDuplicadosVisibles()
+	if len(grupos) == 0 {
 		if a.cargandoDuplicados {
 			return a.dibujarTextoPrincipal(gtx, "Cargando grupos...")
 		}
+		if a.soloDuplicadosMultimedia.Value {
+			return a.dibujarTextoPrincipal(gtx, "No se encontraron grupos de duplicados multimedia con los filtros actuales.")
+		}
 		return a.dibujarTextoPrincipal(gtx, "Todavía no hay grupos para esta combinación de filtros.")
 	}
-
-	grupos := a.gruposDuplicados
 
 	return a.dibujarListaConBarra(gtx, &a.listaDuplicados, len(grupos), func(gtx layout.Context, indice int) layout.Dimensions {
 		grupo := grupos[indice]
@@ -1759,6 +1775,7 @@ func (a *Aplicacion) dibujarListaDuplicados(gtx layout.Context) layout.Dimension
 
 func (a *Aplicacion) dibujarGrupoDuplicado(gtx layout.Context, grupo modelo.GrupoDuplicados) layout.Dimensions {
 	widgets := a.asegurarWidgetsGrupo(grupo)
+	contraido := a.grupoDuplicadoContraido(grupo)
 
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -1766,8 +1783,9 @@ func (a *Aplicacion) dibujarGrupoDuplicado(gtx layout.Context, grupo modelo.Grup
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.dibujarTextoPrincipal(gtx, fmt.Sprintf("%s | %d elementos | recuperable %s", grupo.NombreRepresentivo, grupo.CantidadElementos, formatearTamano(grupo.TamanoRecuperable)))
+							return a.dibujarResumenGrupoDuplicado(gtx, &widgets.AlternarColapso, grupo, contraido)
 						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonAccion(gtx, &widgets.BorrarMasAntiguo, "Borrar más antiguo", a.paleta.Peligro, a.paleta.Texto, func() {
 								if len(grupo.Elementos) > 0 {
@@ -1785,13 +1803,91 @@ func (a *Aplicacion) dibujarGrupoDuplicado(gtx layout.Context, grupo modelo.Grup
 						}),
 					)
 				}),
-				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, a.construirFilasGrupoDuplicado(grupo, widgets)...)
+					if contraido {
+						return layout.Dimensions{}
+					}
+					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return a.dibujarCuerpoGrupoDuplicado(gtx, grupo, widgets)
+					})
 				}),
 			)
 		})
 	})
+}
+
+func (a *Aplicacion) dibujarResumenGrupoDuplicado(gtx layout.Context, clic *widget.Clickable, grupo modelo.GrupoDuplicados, contraido bool) layout.Dimensions {
+	pulsado := false
+	for clic.Clicked(gtx) {
+		pulsado = true
+	}
+
+	indicador := "▼ "
+	if contraido {
+		indicador = "▶ "
+	}
+	resumen := indicador + fmt.Sprintf("%s | %d elementos | recuperable %s", grupo.NombreRepresentivo, grupo.CantidadElementos, formatearTamano(grupo.TamanoRecuperable))
+
+	dim := clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		estilo := material.Label(a.tema, unit.Sp(14), resumen)
+		estilo.Color = a.paleta.Acento
+		estilo.MaxLines = 1
+		estilo.Truncator = "…"
+		return estilo.Layout(gtx)
+	})
+
+	if pulsado {
+		a.alternarColapsoGrupoDuplicado(grupo)
+		if a.ventana != nil {
+			a.ventana.Invalidate()
+		}
+	}
+	return dim
+}
+
+func (a *Aplicacion) dibujarCuerpoGrupoDuplicado(gtx layout.Context, grupo modelo.GrupoDuplicados, widgets *widgetsGrupoDuplicado) layout.Dimensions {
+	archivoPreview, tienePreview := a.archivoPreviewDuplicados(grupo)
+	if !tienePreview {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, a.construirFilasGrupoDuplicado(grupo, widgets)...)
+	}
+
+	anchoPreview := anchoPreviewGrupoDuplicado(gtx.Constraints.Max.X)
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, a.construirFilasGrupoDuplicado(grupo, widgets)...)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			ancho := minimo(anchoPreview, gtx.Constraints.Max.X)
+			if ancho < 1 {
+				return layout.Dimensions{}
+			}
+			gtx.Constraints.Min.X = ancho
+			gtx.Constraints.Max.X = ancho
+			return a.dibujarBloquePreviewDuplicado(gtx, archivoPreview)
+		}),
+	)
+}
+
+func anchoPreviewGrupoDuplicado(anchoDisponible int) int {
+	if anchoDisponible <= 0 {
+		return 320
+	}
+
+	ancho := anchoDisponible / 3
+	if anchoDisponible < 680 {
+		ancho = anchoDisponible / 2
+	}
+	if ancho < 180 {
+		ancho = 180
+	}
+	if ancho > 420 {
+		ancho = 420
+	}
+	if ancho > anchoDisponible {
+		ancho = anchoDisponible
+	}
+	return ancho
 }
 
 func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, widgets *widgetsGrupoDuplicado) []layout.FlexChild {
@@ -1800,7 +1896,15 @@ func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, 
 		elemento := elemento
 		hijos = append(hijos, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
+				seleccionado := a.rutaPreviewDuplicados == elemento.Ruta
+				dibujarContenedor := func(gtx layout.Context, contenido layout.Widget) layout.Dimensions {
+					if seleccionado {
+						return dibujarPanelConBorde(gtx, a.paleta.Panel, a.paleta.Acento, unit.Dp(12), unit.Dp(1), contenido)
+					}
+					return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(12), contenido)
+				}
+
+				return dibujarContenedor(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1829,13 +1933,31 @@ func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, 
 							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								if widgets.SeleccionarRuta == nil {
+									widgets.SeleccionarRuta = make(map[string]*widget.Clickable)
+								}
+								clicRuta, ok := widgets.SeleccionarRuta[elemento.Ruta]
+								if !ok {
+									clicRuta = &widget.Clickable{}
+									widgets.SeleccionarRuta[elemento.Ruta] = clicRuta
+								}
+
 								return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										return a.dibujarTextoPrincipal(gtx, elemento.Ruta)
+										if elemento.EsMultimedia() {
+											return a.dibujarEnlacePreviewDuplicado(gtx, clicRuta, elemento.NombreVisible(), seleccionado, func() {
+												a.seleccionarPreviewDuplicados(elemento)
+											})
+										}
+										return a.dibujarTextoPrincipalTruncado(gtx, elemento.NombreVisible())
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return a.dibujarTextoSecundario(gtx, elemento.Ruta)
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										return a.dibujarTextoSecundario(gtx, fmt.Sprintf("%s | %s | %s", elemento.Origen, formatearTamano(elemento.Tamano), elemento.Modificado.Format("2006-01-02 15:04:05")))
+										return a.dibujarTextoSecundario(gtx, resumenElementoDuplicado(grupo, elemento))
 									}),
 								)
 							}),
@@ -1863,6 +1985,109 @@ func (a *Aplicacion) construirFilasGrupoDuplicado(grupo modelo.GrupoDuplicados, 
 	}
 
 	return hijos
+}
+
+func resumenElementoDuplicado(grupo modelo.GrupoDuplicados, elemento modelo.Archivo) string {
+	partes := []string{string(elemento.Origen)}
+
+	switch grupo.Tipo {
+	case modelo.CoincidenciaParcialImagen:
+		if elemento.Ancho > 0 && elemento.Alto > 0 {
+			partes = append(partes, fmt.Sprintf("%dx%d px", elemento.Ancho, elemento.Alto))
+		}
+	case modelo.CoincidenciaParcialVideo:
+		if elemento.Duracion > 0 {
+			partes = append(partes, formatearDuracion(elemento.Duracion))
+		}
+	}
+
+	partes = append(partes,
+		formatearTamano(elemento.Tamano),
+		elemento.Modificado.Format("2006-01-02 15:04:05"),
+	)
+
+	return strings.Join(partes, " | ")
+}
+
+func (a *Aplicacion) dibujarEnlacePreviewDuplicado(gtx layout.Context, clic *widget.Clickable, texto string, activo bool, alHacer func()) layout.Dimensions {
+	pulsado := false
+	for clic.Clicked(gtx) {
+		pulsado = true
+	}
+
+	colorTexto := a.paleta.Acento
+	if activo {
+		colorTexto = a.paleta.Exito
+	}
+
+	dim := clic.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		estilo := material.Label(a.tema, unit.Sp(14), texto)
+		estilo.Color = colorTexto
+		estilo.MaxLines = 1
+		estilo.Truncator = "…"
+		return estilo.Layout(gtx)
+	})
+
+	if pulsado {
+		if alHacer != nil {
+			alHacer()
+		}
+		if a.ventana != nil {
+			a.ventana.Invalidate()
+		}
+	}
+	return dim
+}
+
+func (a *Aplicacion) dibujarBloquePreviewDuplicado(gtx layout.Context, archivo modelo.Archivo) layout.Dimensions {
+	return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
+		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			maximoPreview := minimo(gtx.Constraints.Max.X, 960)
+			if maximoPreview <= 0 {
+				maximoPreview = 960
+			}
+
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoPrincipal(gtx, "Vista previa")
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoSecundario(gtx, archivo.Ruta)
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					contexto := gtx
+					altoMaximo := gtx.Dp(unit.Dp(360))
+					if contexto.Constraints.Max.Y > altoMaximo {
+						contexto.Constraints.Max.Y = altoMaximo
+					}
+					if archivo.Tipo == modelo.TipoVideo {
+						maximoFotograma := minimo(maximoPreview, 1_280)
+						a.actualizarReproductorVideo(contexto, archivo, maximoFotograma)
+						if a.reproductorVideo.Fotograma != nil {
+							return a.dibujarImagenConRegiones(contexto, archivo, a.reproductorVideo.Fotograma, false)
+						}
+						return a.dibujarPreviewComun(contexto, archivo, maximoFotograma, false)
+					}
+					return a.dibujarPreviewComun(contexto, archivo, maximoPreview, false)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if archivo.Tipo != modelo.TipoVideo {
+						return layout.Dimensions{}
+					}
+					maximoFotograma := minimo(maximoPreview, 1_280)
+					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
+							return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return a.dibujarControlesReproductorVideo(gtx, archivo, maximoFotograma)
+							})
+						})
+					})
+				}),
+			)
+		})
+	})
 }
 
 func (a *Aplicacion) borrarRutasDuplicadas(rutas []string) {
@@ -2426,13 +2651,14 @@ func (a *Aplicacion) asegurarWidgetsElemento(ruta string) *widgetsElemento {
 }
 
 func (a *Aplicacion) asegurarWidgetsGrupo(grupo modelo.GrupoDuplicados) *widgetsGrupoDuplicado {
-	clave := string(grupo.Tipo) + "|" + grupo.Clave
+	clave := claveGrupoDuplicado(grupo)
 	if widgets, existe := a.grupoWidgets[clave]; existe {
 		return widgets
 	}
 	widgets := &widgetsGrupoDuplicado{
-		Seleccion:      make(map[string]*widget.Bool),
-		BorrarElemento: make(map[string]*widget.Clickable),
+		Seleccion:       make(map[string]*widget.Bool),
+		BorrarElemento:  make(map[string]*widget.Clickable),
+		SeleccionarRuta: make(map[string]*widget.Clickable),
 	}
 	a.grupoWidgets[clave] = widgets
 	return widgets

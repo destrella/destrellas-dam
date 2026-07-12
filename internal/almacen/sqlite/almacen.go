@@ -512,15 +512,9 @@ LIMIT ? OFFSET ?`, claveExpr, claveExpr, filtroTipo, condicionCategoria, ordenSQ
 	}
 	defer filas.Close()
 
-	consultaElementos := fmt.Sprintf(`
-SELECT ruta, origen, ruta_padre, nombre, tamano, modificado_unix, tipo, es_oculto, es_directorio,
-	ancho, alto, duracion_ms, metadatos_json, hash_md5, hash_sha256, hash_dhash_imagen, hash_dhash_video,
-	tiene_gps, tiene_regiones, tiene_where_froms, tiene_ia, tiene_social, es_adulto, ubicacion, where_froms
-FROM archivos
-WHERE es_directorio = 0 AND %s = ?
-ORDER BY modificado_unix ASC, nombre ASC`, claveExpr)
-
 	var grupos []modelo.GrupoDuplicados
+	claves := make([]string, 0, limite)
+	indicesGrupos := make(map[string]int, limite)
 	for filas.Next() {
 		var clave string
 		var cantidad int
@@ -530,36 +524,67 @@ ORDER BY modificado_unix ASC, nombre ASC`, claveExpr)
 			return nil, fmt.Errorf("no se pudo leer un grupo duplicado: %w", err)
 		}
 
-		filasElementos, err := a.base.QueryContext(ctx, consultaElementos, clave)
-		if err != nil {
-			return nil, fmt.Errorf("no se pudieron consultar los elementos del grupo %q: %w", clave, err)
-		}
-
-		var elementos []modelo.Archivo
-		for filasElementos.Next() {
-			archivo, err := escanearArchivo(filasElementos)
-			if err != nil {
-				filasElementos.Close()
-				return nil, err
-			}
-			elementos = append(elementos, archivo)
-		}
-		if err := filasElementos.Close(); err != nil {
-			return nil, fmt.Errorf("no se pudieron cerrar los elementos del grupo %q: %w", clave, err)
-		}
-
+		indicesGrupos[clave] = len(grupos)
+		claves = append(claves, clave)
 		grupos = append(grupos, modelo.GrupoDuplicados{
 			Clave:              clave,
 			Tipo:               tipo,
-			Elementos:          elementos,
 			TamanoRecuperable:  espacioRecuperable,
-			CategoriaSugerida:  inferirCategoria(elementos),
 			CantidadElementos:  cantidad,
 			NombreRepresentivo: nombreMin,
 		})
 	}
 
-	return grupos, filas.Err()
+	if err := filas.Err(); err != nil {
+		return nil, err
+	}
+	if len(grupos) == 0 {
+		return grupos, nil
+	}
+
+	marcadores := make([]string, 0, len(claves))
+	args := make([]any, 0, len(claves))
+	for _, clave := range claves {
+		marcadores = append(marcadores, "?")
+		args = append(args, clave)
+	}
+
+	consultaElementos := fmt.Sprintf(`
+SELECT %s AS clave_duplicado,
+	ruta, origen, ruta_padre, nombre, tamano, modificado_unix, tipo, es_oculto, es_directorio,
+	ancho, alto, duracion_ms, metadatos_json, hash_md5, hash_sha256, hash_dhash_imagen, hash_dhash_video,
+	tiene_gps, tiene_regiones, tiene_where_froms, tiene_ia, tiene_social, es_adulto, ubicacion, where_froms
+FROM archivos
+WHERE es_directorio = 0
+	AND %s IN (%s)
+ORDER BY clave_duplicado ASC, modificado_unix ASC, nombre ASC`, claveExpr, claveExpr, strings.Join(marcadores, ", "))
+
+	filasElementos, err := a.base.QueryContext(ctx, consultaElementos, args...)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudieron consultar los elementos agrupados de duplicados: %w", err)
+	}
+	defer filasElementos.Close()
+
+	for filasElementos.Next() {
+		clave, archivo, err := escanearArchivoConClave(filasElementos)
+		if err != nil {
+			return nil, err
+		}
+		indice, ok := indicesGrupos[clave]
+		if !ok {
+			continue
+		}
+		grupos[indice].Elementos = append(grupos[indice].Elementos, archivo)
+	}
+	if err := filasElementos.Err(); err != nil {
+		return nil, err
+	}
+
+	for indice := range grupos {
+		grupos[indice].CategoriaSugerida = inferirCategoria(grupos[indice].Elementos)
+	}
+
+	return grupos, nil
 }
 
 // ObtenerEstadisticasDuplicados resume los grupos encontrados en todos los algoritmos.
@@ -672,6 +697,23 @@ ON CONFLICT(ruta) DO UPDATE SET
 func escanearArchivo(escaner interface {
 	Scan(dest ...any) error
 }) (modelo.Archivo, error) {
+	return escanearArchivoConPrefijo(escaner)
+}
+
+func escanearArchivoConClave(escaner interface {
+	Scan(dest ...any) error
+}) (string, modelo.Archivo, error) {
+	var clave string
+	archivo, err := escanearArchivoConPrefijo(escaner, &clave)
+	if err != nil {
+		return "", modelo.Archivo{}, err
+	}
+	return clave, archivo, nil
+}
+
+func escanearArchivoConPrefijo(escaner interface {
+	Scan(dest ...any) error
+}, prefijo ...any) (modelo.Archivo, error) {
 	var archivo modelo.Archivo
 	var origen string
 	var tipo string
@@ -689,7 +731,7 @@ func escanearArchivo(escaner interface {
 	var whereFroms string
 	var ubicacion string
 
-	err := escaner.Scan(
+	destinos := append(prefijo,
 		&archivo.Ruta,
 		&origen,
 		&archivo.RutaPadre,
@@ -716,6 +758,7 @@ func escanearArchivo(escaner interface {
 		&ubicacion,
 		&whereFroms,
 	)
+	err := escaner.Scan(destinos...)
 	if err != nil {
 		return modelo.Archivo{}, err
 	}

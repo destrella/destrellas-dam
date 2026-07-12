@@ -102,8 +102,10 @@ type widgetsGrupoDuplicado struct {
 	BorrarMasAntiguo widget.Clickable
 	BorrarMasNuevo   widget.Clickable
 	BorrarMarcados   widget.Clickable
+	AlternarColapso  widget.Clickable
 	Seleccion        map[string]*widget.Bool
 	BorrarElemento   map[string]*widget.Clickable
+	SeleccionarRuta  map[string]*widget.Clickable
 }
 
 type estadoPreview struct {
@@ -170,17 +172,22 @@ type Aplicacion struct {
 	edicionRegiones      estadoEdicionRegiones
 	edicionRecorte       estadoEdicionRecorte
 
-	gruposDuplicados         []modelo.GrupoDuplicados
-	tipoCoincidenciaActual   modelo.TipoCoincidencia
-	categoriaDuplicados      modelo.CategoriaDuplicados
-	ordenDuplicados          modelo.OrdenDuplicados
-	progresoDuplicados       indexador.EventoProgreso
-	cargandoDuplicados       bool
-	cancelarDescubrimiento   context.CancelFunc
-	progresoMetadatos        indexador.EventoProgreso
-	escanandoMetadatos       bool
-	cancelarEscaneoMetadatos context.CancelFunc
-	versionEscaneoMetadatos  int
+	gruposDuplicados           []modelo.GrupoDuplicados
+	tipoCoincidenciaActual     modelo.TipoCoincidencia
+	categoriaDuplicados        modelo.CategoriaDuplicados
+	ordenDuplicados            modelo.OrdenDuplicados
+	rutaPreviewDuplicados      string
+	gruposDuplicadosContraidos map[string]bool
+	duplicadosInicializados    bool
+	progresoDuplicados         indexador.EventoProgreso
+	cargandoDuplicados         bool
+	cancelarCargaDuplicados    context.CancelFunc
+	versionCargaDuplicados     int
+	cancelarDescubrimiento     context.CancelFunc
+	progresoMetadatos          indexador.EventoProgreso
+	escanandoMetadatos         bool
+	cancelarEscaneoMetadatos   context.CancelFunc
+	versionEscaneoMetadatos    int
 
 	actualizaciones chan func()
 	mensajeEstado   string
@@ -284,6 +291,7 @@ type Aplicacion struct {
 	botonDuplicadosLocales      widget.Clickable
 	botonDuplicadosRemotos      widget.Clickable
 	botonDuplicadosMixtos       widget.Clickable
+	soloDuplicadosMultimedia    widget.Bool
 	botonEscanearLocal          widget.Clickable
 	botonEscanearRemoto         widget.Clickable
 	botonCoincidenciaExacta     widget.Clickable
@@ -332,37 +340,38 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	rutaUsuario := resolverRutaUsuarioLocal(dependencias.Configuracion.CarpetaInicial)
 
 	appUI := &Aplicacion{
-		tema:                   tema,
-		paleta:                 paleta,
-		repoConfiguracion:      dependencias.RepositorioConfig,
-		configuracion:          dependencias.Configuracion,
-		almacen:                dependencias.Almacen,
-		listador:               dependencias.Listador,
-		indexador:              dependencias.Indexador,
-		servicioMetadatos:      dependencias.Metadatos,
-		servicioArchivos:       dependencias.Archivos,
-		servicioDuplicados:     dependencias.Duplicados,
-		clienteYandex:          dependencias.Yandex,
-		rutaUsuario:            rutaUsuario,
-		rutaLibraryUsuario:     filepath.Join(rutaUsuario, "Library"),
-		vistaActual:            vistaPrincipal,
-		pestanaLateral:         pestanaDirectorios,
-		filtros:                dependencias.Configuracion.FiltrosPorDefecto,
-		carpetaSeleccionada:    dependencias.Configuracion.CarpetaInicial,
-		origenListado:          origenListadoCarpeta,
-		claveListadoActual:     dependencias.Configuracion.CarpetaInicial,
-		hayMasElementos:        true,
-		seleccionLote:          make(map[string]bool),
-		previews:               make(map[string]*estadoPreview),
-		metadatosPendientes:    make(map[string]bool),
-		metadatosVerificados:   make(map[string]int64),
-		tipoCoincidenciaActual: modelo.CoincidenciaExacta,
-		categoriaDuplicados:    modelo.CategoriaDuplicadosLocales,
-		ordenDuplicados:        modelo.OrdenPorTamanoGrupo,
-		actualizaciones:        make(chan func(), 512),
-		elementoWidgets:        make(map[string]*widgetsElemento),
-		grupoWidgets:           make(map[string]*widgetsGrupoDuplicado),
-		widgetsLateral:         make(map[string]*widget.Clickable),
+		tema:                       tema,
+		paleta:                     paleta,
+		repoConfiguracion:          dependencias.RepositorioConfig,
+		configuracion:              dependencias.Configuracion,
+		almacen:                    dependencias.Almacen,
+		listador:                   dependencias.Listador,
+		indexador:                  dependencias.Indexador,
+		servicioMetadatos:          dependencias.Metadatos,
+		servicioArchivos:           dependencias.Archivos,
+		servicioDuplicados:         dependencias.Duplicados,
+		clienteYandex:              dependencias.Yandex,
+		rutaUsuario:                rutaUsuario,
+		rutaLibraryUsuario:         filepath.Join(rutaUsuario, "Library"),
+		vistaActual:                vistaPrincipal,
+		pestanaLateral:             pestanaDirectorios,
+		filtros:                    dependencias.Configuracion.FiltrosPorDefecto,
+		carpetaSeleccionada:        dependencias.Configuracion.CarpetaInicial,
+		origenListado:              origenListadoCarpeta,
+		claveListadoActual:         dependencias.Configuracion.CarpetaInicial,
+		hayMasElementos:            true,
+		seleccionLote:              make(map[string]bool),
+		previews:                   make(map[string]*estadoPreview),
+		metadatosPendientes:        make(map[string]bool),
+		metadatosVerificados:       make(map[string]int64),
+		tipoCoincidenciaActual:     modelo.CoincidenciaExacta,
+		categoriaDuplicados:        modelo.CategoriaDuplicadosLocales,
+		ordenDuplicados:            modelo.OrdenPorTamanoGrupo,
+		actualizaciones:            make(chan func(), 512),
+		elementoWidgets:            make(map[string]*widgetsElemento),
+		gruposDuplicadosContraidos: make(map[string]bool),
+		grupoWidgets:               make(map[string]*widgetsGrupoDuplicado),
+		widgetsLateral:             make(map[string]*widget.Clickable),
 	}
 
 	appUI.listaLateral.Axis = layout.Vertical
@@ -431,7 +440,6 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.reconstruirArbol()
 	appUI.reiniciarListado()
 	appUI.recargarColeccionesLaterales()
-	appUI.recargarDuplicados()
 
 	return appUI
 }
@@ -446,6 +454,9 @@ func (a *Aplicacion) Ejecutar(ventana *app.Window) error {
 		case app.DestroyEvent:
 			if a.sesionListado != nil {
 				_ = a.sesionListado.Cerrar()
+			}
+			if a.cancelarCargaDuplicados != nil {
+				a.cancelarCargaDuplicados()
 			}
 			if a.cancelarDescubrimiento != nil {
 				a.cancelarDescubrimiento()
@@ -947,26 +958,144 @@ func (a *Aplicacion) recargarColeccionesLaterales() {
 }
 
 func (a *Aplicacion) recargarDuplicados() {
-	if a.cargandoDuplicados {
+	if a.servicioDuplicados == nil {
 		return
 	}
+	if !a.duplicadosInicializados && a.vistaActual != vistaDuplicados {
+		return
+	}
+
+	if a.cancelarCargaDuplicados != nil {
+		a.cancelarCargaDuplicados()
+	}
+
+	a.duplicadosInicializados = true
 	a.cargandoDuplicados = true
+	a.versionCargaDuplicados++
+	versionActual := a.versionCargaDuplicados
+	a.establecerEstado("Actualizando grupos de duplicados", nil)
 
 	tipo := a.tipoCoincidenciaActual
 	categoria := a.categoriaDuplicados
 	orden := a.ordenDuplicados
+	ctx, cancelar := context.WithCancel(context.Background())
+	a.cancelarCargaDuplicados = cancelar
+
 	go func() {
-		grupos, err := a.servicioDuplicados.ListarGrupos(context.Background(), tipo, categoria, orden, 500, 0)
+		grupos, err := a.servicioDuplicados.ListarGrupos(ctx, tipo, categoria, orden, 500, 0)
 		a.encolarActualizacion(func() {
+			if versionActual != a.versionCargaDuplicados {
+				return
+			}
+
+			a.cancelarCargaDuplicados = nil
 			a.cargandoDuplicados = false
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				a.establecerEstado("No se pudieron cargar los grupos de duplicados", err)
 				return
 			}
 			a.gruposDuplicados = grupos
 			a.grupoWidgets = make(map[string]*widgetsGrupoDuplicado)
+			a.sincronizarPreviewDuplicadosConGrupos(grupos)
+			a.establecerEstado(fmt.Sprintf("%d grupos de duplicados cargados", len(grupos)), nil)
 		})
 	}()
+}
+
+func (a *Aplicacion) gruposDuplicadosVisibles() []modelo.GrupoDuplicados {
+	if !a.soloDuplicadosMultimedia.Value {
+		return a.gruposDuplicados
+	}
+
+	filtrados := make([]modelo.GrupoDuplicados, 0, len(a.gruposDuplicados))
+	for _, grupo := range a.gruposDuplicados {
+		if grupoDuplicadoTieneMultimedia(grupo) {
+			filtrados = append(filtrados, grupo)
+		}
+	}
+	return filtrados
+}
+
+func grupoDuplicadoTieneMultimedia(grupo modelo.GrupoDuplicados) bool {
+	for _, elemento := range grupo.Elementos {
+		if elemento.EsMultimedia() {
+			return true
+		}
+	}
+	return false
+}
+
+func grupoDuplicadoContieneRuta(grupo modelo.GrupoDuplicados, ruta string) bool {
+	if strings.TrimSpace(ruta) == "" {
+		return false
+	}
+	for _, elemento := range grupo.Elementos {
+		if elemento.Ruta == ruta {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Aplicacion) sincronizarPreviewDuplicadosConGrupos(grupos []modelo.GrupoDuplicados) {
+	if strings.TrimSpace(a.rutaPreviewDuplicados) == "" {
+		return
+	}
+	for _, grupo := range grupos {
+		if grupoDuplicadoContieneRuta(grupo, a.rutaPreviewDuplicados) {
+			return
+		}
+	}
+	a.rutaPreviewDuplicados = ""
+}
+
+func (a *Aplicacion) seleccionarPreviewDuplicados(archivo modelo.Archivo) {
+	if !archivo.EsMultimedia() {
+		return
+	}
+	a.rutaPreviewDuplicados = archivo.Ruta
+	a.activarArchivo(archivo)
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) archivoPreviewDuplicados(grupo modelo.GrupoDuplicados) (modelo.Archivo, bool) {
+	if strings.TrimSpace(a.rutaPreviewDuplicados) == "" {
+		return modelo.Archivo{}, false
+	}
+	for _, elemento := range grupo.Elementos {
+		if elemento.Ruta != a.rutaPreviewDuplicados {
+			continue
+		}
+		if a.tieneArchivoActivo && a.archivoActivo.Ruta == elemento.Ruta {
+			return a.archivoActivo, true
+		}
+		return elemento, true
+	}
+	return modelo.Archivo{}, false
+}
+
+func claveGrupoDuplicado(grupo modelo.GrupoDuplicados) string {
+	return string(grupo.Tipo) + "|" + grupo.Clave
+}
+
+func (a *Aplicacion) grupoDuplicadoContraido(grupo modelo.GrupoDuplicados) bool {
+	if a.gruposDuplicadosContraidos == nil {
+		return false
+	}
+	return a.gruposDuplicadosContraidos[claveGrupoDuplicado(grupo)]
+}
+
+func (a *Aplicacion) alternarColapsoGrupoDuplicado(grupo modelo.GrupoDuplicados) {
+	if a.gruposDuplicadosContraidos == nil {
+		a.gruposDuplicadosContraidos = make(map[string]bool)
+	}
+	clave := claveGrupoDuplicado(grupo)
+	a.gruposDuplicadosContraidos[clave] = !a.gruposDuplicadosContraidos[clave]
 }
 
 func (a *Aplicacion) iniciarEscaneoMetadatos() {
