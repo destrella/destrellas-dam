@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/layout"
+
+	"destrellas-dam/internal/configuracion"
 	"destrellas-dam/internal/modelo"
 )
 
@@ -144,5 +147,67 @@ func TestArchivoDebeVerificarseConSistemaUnaVezPorRevision(t *testing.T) {
 	archivo.Modificado = archivo.Modificado.Add(time.Second)
 	if !app.archivoDebeVerificarseConSistema(archivo) {
 		t.Fatal("el archivo debería volver a verificarse cuando cambia su fecha de modificación")
+	}
+}
+
+func TestPrepararEstadoTrasAccionArchivoVuelveAExploradorDesdeVisor(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		vistaActual:        vistaElementoUnico,
+		tieneArchivoActivo: true,
+		edicionRegiones: estadoEdicionRegiones{
+			Ruta:         "/tmp/imagen.jpg",
+			RegionesBase: []modelo.RegionEtiquetada{{Nombre: "Persona", X: 0.1, Y: 0.2, Ancho: 0.3, Alto: 0.4}},
+		},
+		edicionRecorte: estadoEdicionRecorte{
+			Ruta:           "/tmp/imagen.jpg",
+			TieneSeleccion: true,
+			Seleccion:      modelo.RegionEtiquetada{X: 0.1, Y: 0.1, Ancho: 0.8, Alto: 0.8},
+		},
+		reproductorVideo: estadoReproductorVideo{
+			Ruta:          "/tmp/video.mov",
+			Reproduciendo: true,
+		},
+	}
+
+	app.prepararEstadoTrasAccionArchivo()
+
+	if app.vistaActual != vistaPrincipal {
+		t.Fatalf("la vista debería regresar a explorador, se obtuvo %q", app.vistaActual)
+	}
+	if app.tieneArchivoActivo {
+		t.Fatal("no debería quedar archivo activo tras la acción")
+	}
+	if app.edicionRegiones.Ruta != "" {
+		t.Fatal("la edición de regiones debería limpiarse")
+	}
+	if app.edicionRecorte.Ruta != "" {
+		t.Fatal("la edición de recorte debería limpiarse")
+	}
+	if app.reproductorVideo.Ruta != "" || app.reproductorVideo.Reproduciendo {
+		t.Fatal("el reproductor de video debería reiniciarse")
+	}
+}
+
+func TestCalcularObjetivoRestauracionListadoRespetaScrollYPagina(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		configuracion: configuracion.Configuracion{
+			TamanoPaginaLocal: 80,
+		},
+		elementos: make([]modelo.Archivo, 120),
+	}
+
+	objetivo := app.calcularObjetivoRestauracionListado(layout.Position{First: 140})
+	if objetivo != 220 {
+		t.Fatalf("objetivo inesperado: %d", objetivo)
+	}
+
+	app.elementos = make([]modelo.Archivo, 260)
+	objetivo = app.calcularObjetivoRestauracionListado(layout.Position{First: 140})
+	if objetivo != 260 {
+		t.Fatalf("debería priorizar el número de elementos ya cargados, se obtuvo %d", objetivo)
 	}
 }

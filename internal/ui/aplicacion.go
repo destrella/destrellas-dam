@@ -143,6 +143,7 @@ type Aplicacion struct {
 	claveListadoActual  string
 	versionListado      int
 	offsetListado       int
+	objetivoListado     int
 	sesionListado       *indexador.SesionListado
 	elementos           []modelo.Archivo
 	cargandoElementos   bool
@@ -722,6 +723,14 @@ func (a *Aplicacion) criterioOrdenConfiguracion() modelo.CriterioOrdenListado {
 }
 
 func (a *Aplicacion) reiniciarListado() {
+	a.reiniciarListadoConPosicion(layout.Position{}, false)
+}
+
+func (a *Aplicacion) reiniciarListadoPreservandoPosicion() {
+	a.reiniciarListadoConPosicion(a.listaCentro.Position, true)
+}
+
+func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, preservarPosicion bool) {
 	if a.sesionListado != nil {
 		_ = a.sesionListado.Cerrar()
 		a.sesionListado = nil
@@ -733,7 +742,13 @@ func (a *Aplicacion) reiniciarListado() {
 	a.elementoWidgets = make(map[string]*widgetsElemento)
 	a.hayMasElementos = true
 	a.cargandoElementos = false
-	a.listaCentro.Position = layout.Position{}
+	a.objetivoListado = 0
+	if preservarPosicion {
+		a.listaCentro.Position = posicion
+		a.objetivoListado = a.calcularObjetivoRestauracionListado(posicion)
+	} else {
+		a.listaCentro.Position = layout.Position{}
+	}
 
 	switch a.origenListado {
 	case origenListadoEtiqueta:
@@ -747,6 +762,7 @@ func (a *Aplicacion) reiniciarListado() {
 		if err != nil {
 			a.elementos = nil
 			a.hayMasElementos = false
+			a.objetivoListado = 0
 			a.establecerEstado("No se pudo abrir la carpeta seleccionada", err)
 			return
 		}
@@ -754,6 +770,33 @@ func (a *Aplicacion) reiniciarListado() {
 		a.establecerEstado("Cargando elementos de la carpeta seleccionada", nil)
 	}
 
+	a.cargarMasElementos()
+}
+
+func (a *Aplicacion) calcularObjetivoRestauracionListado(posicion layout.Position) int {
+	objetivo := len(a.elementos)
+	pagina := a.configuracion.TamanoPaginaLocal
+	if pagina < 32 {
+		pagina = 64
+	}
+	minimoVisible := posicion.First + pagina
+	if objetivo < minimoVisible {
+		objetivo = minimoVisible
+	}
+	if objetivo < pagina {
+		objetivo = pagina
+	}
+	return objetivo
+}
+
+func (a *Aplicacion) continuarRestauracionListadoSiHaceFalta() {
+	if a.objetivoListado <= 0 {
+		return
+	}
+	if len(a.elementos) >= a.objetivoListado || !a.hayMasElementos {
+		a.objetivoListado = 0
+		return
+	}
 	a.cargarMasElementos()
 }
 
@@ -777,6 +820,7 @@ func (a *Aplicacion) cargarMasElementos() {
 		if sesionActual == nil {
 			a.cargandoElementos = false
 			a.hayMasElementos = false
+			a.objetivoListado = 0
 			return
 		}
 
@@ -790,6 +834,7 @@ func (a *Aplicacion) cargarMasElementos() {
 				a.cargandoElementos = false
 				if err != nil {
 					a.hayMasElementos = false
+					a.objetivoListado = 0
 					a.establecerEstado("No se pudo continuar el listado", err)
 					return
 				}
@@ -801,8 +846,10 @@ func (a *Aplicacion) cargarMasElementos() {
 					}
 				}
 				a.hayMasElementos = !fin
+				a.continuarRestauracionListadoSiHaceFalta()
 
 				if len(a.elementos) == 0 && fin {
+					a.objetivoListado = 0
 					a.establecerEstado("La carpeta seleccionada no contiene elementos compatibles con los filtros activos", nil)
 					return
 				}
@@ -836,6 +883,7 @@ func (a *Aplicacion) cargarMasElementos() {
 			a.cargandoElementos = false
 			if err != nil {
 				a.hayMasElementos = false
+				a.objetivoListado = 0
 				a.establecerEstado("No se pudo continuar el listado", err)
 				return
 			}
@@ -848,8 +896,10 @@ func (a *Aplicacion) cargarMasElementos() {
 			}
 			a.offsetListado = offsetActual + len(lote)
 			a.hayMasElementos = !fin
+			a.continuarRestauracionListadoSiHaceFalta()
 
 			if len(a.elementos) == 0 && fin {
+				a.objetivoListado = 0
 				a.establecerEstado("No se encontraron elementos compatibles para la fuente seleccionada", nil)
 				return
 			}
@@ -1325,12 +1375,7 @@ func (a *Aplicacion) moverArchivoActivo() {
 			} else {
 				a.establecerEstado("Archivo movido correctamente", nil)
 			}
-			a.tieneArchivoActivo = false
-			a.descartarEdicionRegiones()
-			a.descartarEdicionRecorte()
-			a.limpiarReproductorVideo()
-			a.reiniciarListado()
-			a.recargarDuplicados()
+			a.refrescarExploradorTrasAccionArchivo()
 		})
 	}()
 }
@@ -1368,12 +1413,7 @@ func (a *Aplicacion) archivarArchivoActivo() {
 			} else {
 				a.establecerEstado("Archivo archivado correctamente", nil)
 			}
-			a.tieneArchivoActivo = false
-			a.descartarEdicionRegiones()
-			a.descartarEdicionRecorte()
-			a.limpiarReproductorVideo()
-			a.reiniciarListado()
-			a.recargarDuplicados()
+			a.refrescarExploradorTrasAccionArchivo()
 		})
 	}()
 }
@@ -1397,14 +1437,25 @@ func (a *Aplicacion) enviarArchivoActivoAPapelera() {
 			} else {
 				a.establecerEstado("Archivo enviado a la papelera", nil)
 			}
-			a.tieneArchivoActivo = false
-			a.descartarEdicionRegiones()
-			a.descartarEdicionRecorte()
-			a.limpiarReproductorVideo()
-			a.reiniciarListado()
-			a.recargarDuplicados()
+			a.refrescarExploradorTrasAccionArchivo()
 		})
 	}()
+}
+
+func (a *Aplicacion) refrescarExploradorTrasAccionArchivo() {
+	a.prepararEstadoTrasAccionArchivo()
+	a.reiniciarListadoPreservandoPosicion()
+	a.recargarDuplicados()
+}
+
+func (a *Aplicacion) prepararEstadoTrasAccionArchivo() {
+	if a.vistaActual == vistaElementoUnico {
+		a.vistaActual = vistaPrincipal
+	}
+	a.tieneArchivoActivo = false
+	a.descartarEdicionRegiones()
+	a.descartarEdicionRecorte()
+	a.limpiarReproductorVideo()
 }
 
 func (a *Aplicacion) rutasSeleccionadas() []string {
@@ -1511,7 +1562,7 @@ func (a *Aplicacion) procesarSeleccionLote(accion func(archivo modelo.Archivo) e
 			} else {
 				a.establecerEstado(fmt.Sprintf("Acción por lotes completada para %d elementos", procesados), nil)
 			}
-			a.reiniciarListado()
+			a.reiniciarListadoPreservandoPosicion()
 			a.recargarDuplicados()
 		})
 	}()
