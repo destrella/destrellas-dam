@@ -461,7 +461,7 @@ func (a *Aplicacion) dibujarColumnaLateral(gtx layout.Context) layout.Dimensions
 }
 
 func (a *Aplicacion) dibujarColumnaCentral(gtx layout.Context) layout.Dimensions {
-	return dibujarPanel(gtx, a.paleta.Panel, unit.Dp(18), func(gtx layout.Context) layout.Dimensions {
+	dim := dibujarPanel(gtx, a.paleta.Panel, unit.Dp(18), func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -489,6 +489,8 @@ func (a *Aplicacion) dibujarColumnaCentral(gtx layout.Context) layout.Dimensions
 			)
 		})
 	})
+	a.procesarAtajosExplorador(gtx)
+	return dim
 }
 
 func (a *Aplicacion) dibujarColumnaDetalle(gtx layout.Context) layout.Dimensions {
@@ -1294,6 +1296,9 @@ func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Arch
 		})
 	})
 	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	if cambioSeleccion || clicks > 0 {
+		a.limpiarFocoEdicion(gtx)
+	}
 	if cambioSeleccion && a.ventana != nil {
 		a.ventana.Invalidate()
 	}
@@ -1353,6 +1358,9 @@ func (a *Aplicacion) dibujarTarjetaElemento(gtx layout.Context, archivo modelo.A
 		})
 	})
 	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	if cambioSeleccion || clicks > 0 {
+		a.limpiarFocoEdicion(gtx)
+	}
 	if cambioSeleccion && a.ventana != nil {
 		a.ventana.Invalidate()
 	}
@@ -1629,7 +1637,12 @@ func (a *Aplicacion) dibujarContenedorNavegacionVisor(gtx layout.Context, conten
 			})
 		}),
 		layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
-		layout.Flexed(1, contenido),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			if a.previewVisorEsInteractiva() {
+				return contenido(gtx)
+			}
+			return a.dibujarAreaPreviewVisor(gtx, contenido)
+		}),
 		layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Dp(anchoBoton)
@@ -1639,6 +1652,31 @@ func (a *Aplicacion) dibujarContenedorNavegacionVisor(gtx layout.Context, conten
 			})
 		}),
 	)
+}
+
+func (a *Aplicacion) previewVisorEsInteractiva() bool {
+	return a.vistaActual == vistaElementoUnico &&
+		(a.edicionRecorte.Activo ||
+			a.edicionRecorte.Arrastrando ||
+			a.edicionRegiones.Etiquetando ||
+			a.edicionRegiones.Arrastrando ||
+			a.edicionRegiones.RegionPendiente != nil)
+}
+
+func (a *Aplicacion) dibujarAreaPreviewVisor(gtx layout.Context, contenido layout.Widget) layout.Dimensions {
+	pulsado := false
+	for a.botonPreviewVisor.Clicked(gtx) {
+		pulsado = true
+	}
+
+	dim := a.botonPreviewVisor.Layout(gtx, contenido)
+	if pulsado {
+		a.limpiarFocoEdicion(gtx)
+		if a.ventana != nil {
+			a.ventana.Invalidate()
+		}
+	}
+	return dim
 }
 
 func (a *Aplicacion) dibujarBotonFlechaVisor(gtx layout.Context, clic *widget.Clickable, etiqueta string, habilitado bool, alHacer func()) layout.Dimensions {
@@ -1691,14 +1729,279 @@ func (a *Aplicacion) procesarAtajosVisor(gtx layout.Context) {
 	}
 }
 
+func (a *Aplicacion) procesarAtajosExplorador(gtx layout.Context) {
+	if a.vistaActual != vistaPrincipal || len(a.elementos) == 0 {
+		return
+	}
+
+	columnas := 1
+	if a.filtros.VistaGaleria {
+		columnas, _, _ = a.parametrosGaleria(gtx)
+	}
+	filas := a.filasNavegacionExplorador(columnas)
+	if len(filas) == 0 {
+		return
+	}
+
+	for {
+		evento, ok := gtx.Event(
+			key.Filter{Name: key.NameLeftArrow},
+			key.Filter{Name: key.NameRightArrow},
+			key.Filter{Name: key.NameUpArrow},
+			key.Filter{Name: key.NameDownArrow},
+		)
+		if !ok {
+			break
+		}
+
+		eventoTecla, ok := evento.(key.Event)
+		if !ok || eventoTecla.State != key.Press {
+			continue
+		}
+		if a.hayEditorEditableEnFoco(gtx) {
+			continue
+		}
+
+		indiceDestino, filaVisualDestino, ok := a.destinoNavegacionExplorador(filas, eventoTecla.Name)
+		if !ok {
+			// Si ya estamos en el borde inferior o derecho y hay más elementos
+			// pendientes, disparamos la carga para que la siguiente pulsación
+			// pueda continuar el recorrido.
+			if (eventoTecla.Name == key.NameRightArrow || eventoTecla.Name == key.NameDownArrow) && a.hayMasElementos {
+				a.cargarMasElementos()
+			}
+			continue
+		}
+		a.seleccionarIndiceExplorador(indiceDestino, filaVisualDestino)
+	}
+}
+
+type filaNavegacionExplorador struct {
+	Visual  int
+	Indices []int
+}
+
+func (a *Aplicacion) filasNavegacionExplorador(columnas int) []filaNavegacionExplorador {
+	if len(a.elementos) == 0 {
+		return nil
+	}
+	if columnas < 1 {
+		columnas = 1
+	}
+
+	if !a.filtros.VistaGaleria {
+		if !a.mostrarAgrupacionRecursivaPorCarpeta() {
+			filas, _ := construirFilasNavegacionExplorador(len(a.elementos), 1, 0, 0)
+			return filas
+		}
+
+		grupos := a.agruparElementosPorCarpeta()
+		filas := make([]filaNavegacionExplorador, 0, len(a.elementos))
+		base := 0
+		visual := 0
+		for _, grupo := range grupos {
+			visual++
+			grupoFilas, siguienteVisual := construirFilasNavegacionExplorador(len(grupo.Elementos), 1, base, visual)
+			filas = append(filas, grupoFilas...)
+			base += len(grupo.Elementos)
+			visual = siguienteVisual
+		}
+		return filas
+	}
+
+	if !a.mostrarAgrupacionRecursivaPorCarpeta() {
+		filas, _ := construirFilasNavegacionExplorador(len(a.elementos), columnas, 0, 0)
+		return filas
+	}
+
+	grupos := a.agruparElementosPorCarpeta()
+	filas := make([]filaNavegacionExplorador, 0, len(a.elementos))
+	base := 0
+	visual := 0
+	for _, grupo := range grupos {
+		visual++
+		grupoFilas, siguienteVisual := construirFilasNavegacionExplorador(len(grupo.Elementos), columnas, base, visual)
+		filas = append(filas, grupoFilas...)
+		base += len(grupo.Elementos)
+		visual = siguienteVisual
+	}
+	return filas
+}
+
+func construirFilasNavegacionExplorador(total, columnas, base, visualInicio int) ([]filaNavegacionExplorador, int) {
+	if total <= 0 {
+		return nil, visualInicio
+	}
+	if columnas < 1 {
+		columnas = 1
+	}
+
+	filas := make([]filaNavegacionExplorador, 0, (total+columnas-1)/columnas)
+	visual := visualInicio
+	for inicio := 0; inicio < total; inicio += columnas {
+		fin := minimo(inicio+columnas, total)
+		fila := make([]int, 0, fin-inicio)
+		for indice := inicio; indice < fin; indice++ {
+			fila = append(fila, base+indice)
+		}
+		filas = append(filas, filaNavegacionExplorador{
+			Visual:  visual,
+			Indices: fila,
+		})
+		visual++
+	}
+	return filas, visual
+}
+
+func posicionIndiceExploradorEnFilas(filas []filaNavegacionExplorador, indice int) (fila, columna int, ok bool) {
+	for numeroFila, actual := range filas {
+		for numeroColumna, candidato := range actual.Indices {
+			if candidato == indice {
+				return numeroFila, numeroColumna, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func indiceDestinoNavegacionExplorador(filas []filaNavegacionExplorador, indiceActual int, tecla key.Name) (indiceDestino, filaVisualDestino int, ok bool) {
+	if len(filas) == 0 {
+		return 0, 0, false
+	}
+
+	if indiceActual < 0 {
+		switch tecla {
+		case key.NameLeftArrow, key.NameUpArrow:
+			ultimaFila := len(filas) - 1
+			ultimaColumna := len(filas[ultimaFila].Indices) - 1
+			return filas[ultimaFila].Indices[ultimaColumna], filas[ultimaFila].Visual, true
+		default:
+			return filas[0].Indices[0], filas[0].Visual, true
+		}
+	}
+
+	filaActual, columnaActual, ok := posicionIndiceExploradorEnFilas(filas, indiceActual)
+	if !ok {
+		return filas[0].Indices[0], filas[0].Visual, true
+	}
+
+	switch tecla {
+	case key.NameLeftArrow:
+		if columnaActual > 0 {
+			return filas[filaActual].Indices[columnaActual-1], filas[filaActual].Visual, true
+		}
+		if filaActual > 0 {
+			filaIndiceDestino := filaActual - 1
+			return filas[filaIndiceDestino].Indices[len(filas[filaIndiceDestino].Indices)-1], filas[filaIndiceDestino].Visual, true
+		}
+	case key.NameRightArrow:
+		if columnaActual+1 < len(filas[filaActual].Indices) {
+			return filas[filaActual].Indices[columnaActual+1], filas[filaActual].Visual, true
+		}
+		if filaActual+1 < len(filas) {
+			filaIndiceDestino := filaActual + 1
+			return filas[filaIndiceDestino].Indices[0], filas[filaIndiceDestino].Visual, true
+		}
+	case key.NameUpArrow:
+		if filaActual > 0 {
+			filaIndiceDestino := filaActual - 1
+			columnaDestino := minimo(columnaActual, len(filas[filaIndiceDestino].Indices)-1)
+			return filas[filaIndiceDestino].Indices[columnaDestino], filas[filaIndiceDestino].Visual, true
+		}
+	case key.NameDownArrow:
+		if filaActual+1 < len(filas) {
+			filaIndiceDestino := filaActual + 1
+			columnaDestino := minimo(columnaActual, len(filas[filaIndiceDestino].Indices)-1)
+			return filas[filaIndiceDestino].Indices[columnaDestino], filas[filaIndiceDestino].Visual, true
+		}
+	}
+
+	return 0, 0, false
+}
+
+func (a *Aplicacion) destinoNavegacionExplorador(filas []filaNavegacionExplorador, tecla key.Name) (indiceDestino, filaVisualDestino int, ok bool) {
+	return indiceDestinoNavegacionExplorador(filas, a.indiceArchivoActivoEnListado(), tecla)
+}
+
+func (a *Aplicacion) seleccionarIndiceExplorador(indice, fila int) {
+	if indice < 0 || indice >= len(a.elementos) {
+		return
+	}
+
+	a.activarArchivo(a.elementos[indice])
+	a.asegurarFilaExploradorVisible(fila)
+	if indice >= len(a.elementos)-2 && a.hayMasElementos {
+		a.cargarMasElementos()
+	}
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) asegurarFilaExploradorVisible(fila int) {
+	posicion, ajustada := ajustarPosicionFilaExploradorVisible(a.listaCentro.Position, fila)
+	if ajustada {
+		a.listaCentro.Position = posicion
+	}
+}
+
+func ajustarPosicionFilaExploradorVisible(posicion layout.Position, fila int) (layout.Position, bool) {
+	if fila < 0 {
+		return posicion, false
+	}
+
+	if posicion.Count <= 0 {
+		posicion.First = fila
+		posicion.Offset = 0
+		posicion.OffsetLast = 0
+		posicion.BeforeEnd = true
+		return posicion, true
+	}
+
+	ultimaVisible := posicion.First + posicion.Count - 1
+	if fila < posicion.First || (fila == posicion.First && posicion.Offset > 0) {
+		posicion.First = fila
+		posicion.Offset = 0
+		posicion.OffsetLast = 0
+		posicion.BeforeEnd = true
+		return posicion, true
+	}
+
+	if fila > ultimaVisible || (fila == ultimaVisible && posicion.OffsetLast < 0) {
+		filasAntesObjetivo := posicion.Count - 1
+		if filasAntesObjetivo > 0 {
+			// Dejamos una fila de margen inferior porque Gio puede contar una
+			// ultima fila visible aunque solo se vea parcialmente.
+			filasAntesObjetivo--
+		}
+		if filasAntesObjetivo < 0 {
+			filasAntesObjetivo = 0
+		}
+		posicion.First = maximo(0, fila-filasAntesObjetivo)
+		posicion.Offset = 0
+		posicion.OffsetLast = 0
+		posicion.BeforeEnd = true
+		return posicion, true
+	}
+
+	return posicion, false
+}
+
 func (a *Aplicacion) hayEditorEditableEnFoco(gtx layout.Context) bool {
 	editores := []*widget.Editor{
 		&a.editorDestinoMover,
+		&a.editorFiltroEtiquetas,
+		&a.editorFiltroLugares,
+		&a.editorFiltroAsociaciones,
 		&a.editorFecha,
 		&a.editorHora,
 		&a.editorZonaHoraria,
 		&a.editorPalabras,
 		&a.editorUbicacion,
+		&a.editorFiltroUbicaciones,
+		&a.editorRelacionUbicacion,
+		&a.editorAsociacionOriginales,
+		&a.editorAsociacionSugeridas,
 		&a.editorComentario,
 		&a.editorCopyright,
 		&a.editorGPSLatitud,
@@ -1707,6 +2010,11 @@ func (a *Aplicacion) hayEditorEditableEnFoco(gtx layout.Context) bool {
 		&a.editorModelo,
 		&a.editorSoftware,
 		&a.editorFormatoImagen,
+		&a.editorCarpetaInicial,
+		&a.editorCarpetaArchivado,
+		&a.editorClaveYandex,
+		&a.editorRutaEscaneoMetadatos,
+		&a.editorRutaEscaneoDuplicados,
 		&a.edicionRegiones.EditorNombre,
 	}
 	for _, editor := range editores {
@@ -2167,6 +2475,7 @@ func (a *Aplicacion) dibujarResumenGrupoDuplicado(gtx layout.Context, clic *widg
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		a.alternarColapsoGrupoDuplicado(grupo)
 		if a.ventana != nil {
 			a.ventana.Invalidate()
@@ -2349,6 +2658,7 @@ func (a *Aplicacion) dibujarEnlacePreviewDuplicado(gtx layout.Context, clic *wid
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2533,6 +2843,7 @@ func (a *Aplicacion) dibujarBotonAccion(gtx layout.Context, clic *widget.Clickab
 	dim := estilo.Layout(gtx)
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2587,6 +2898,7 @@ func (a *Aplicacion) dibujarBotonAccionIconoCuadrado(gtx layout.Context, clic *w
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2655,6 +2967,7 @@ func (a *Aplicacion) dibujarBotonAccionIconoConEtiquetaAltura(gtx layout.Context
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2718,6 +3031,7 @@ func (a *Aplicacion) dibujarBotonNavegacionIcono(gtx layout.Context, clic *widge
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2757,6 +3071,7 @@ func (a *Aplicacion) dibujarFilaArbol(gtx layout.Context, clic *widget.Clickable
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2797,6 +3112,7 @@ func (a *Aplicacion) dibujarBotonIconoCarpeta(gtx layout.Context, clic *widget.C
 	})
 
 	if pulsado {
+		a.limpiarFocoEdicion(gtx)
 		if alHacer != nil {
 			alHacer()
 		}
@@ -2822,6 +3138,13 @@ func cajaDisponible(gtx layout.Context) image.Point {
 		caja.Y = 1
 	}
 	return caja
+}
+
+func (a *Aplicacion) limpiarFocoEdicion(gtx layout.Context) {
+	// Al pulsar controles no editables, liberamos el foco actual para que
+	// la navegación por teclado vuelva a estar disponible de inmediato.
+	gtx.Execute(key.FocusCmd{Tag: nil})
+	gtx.Execute(key.SoftKeyboardCmd{Show: false})
 }
 
 func dibujarIconoEnCaja(gtx layout.Context, caja image.Point, dibujar func(layout.Context, color.NRGBA, color.NRGBA) layout.Dimensions, colorIcono, fondo color.NRGBA) layout.Dimensions {

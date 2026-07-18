@@ -423,6 +423,7 @@ type Aplicacion struct {
 	botonReiniciarVideo          widget.Clickable
 	botonReproducirVideo         widget.Clickable
 	botonAbrirCarpetaContenedora widget.Clickable
+	botonPreviewVisor            widget.Clickable
 	controlProgresoVideo         widget.Float
 }
 

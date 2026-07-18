@@ -153,6 +153,7 @@ func (a *Aplicacion) actualizarInteraccionRecorte(gtx layout.Context, archivo mo
 
 		switch evento.Kind {
 		case pointer.Press:
+			a.limpiarFocoEdicion(gtx)
 			modo := a.resolverModoAjusteRecorte(evento.Position, tamano, tolerancia)
 			if modo == modoRecorteNinguno {
 				continue

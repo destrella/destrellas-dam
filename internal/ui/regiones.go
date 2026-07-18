@@ -276,6 +276,7 @@ func (a *Aplicacion) actualizarInteraccionRegiones(gtx layout.Context, archivo m
 
 		switch evento.Kind {
 		case pointer.Press:
+			a.limpiarFocoEdicion(gtx)
 			a.edicionRegiones.Arrastrando = true
 			a.edicionRegiones.InicioArrastre = evento.Position
 			a.edicionRegiones.FinArrastre = evento.Position
