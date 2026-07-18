@@ -3130,7 +3130,15 @@ func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (ima
 		if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
 			return nil, yandex.ErrNoImplementado
 		}
-		lector, err := a.clienteYandex.DescargarPreview(context.Background(), archivo.Ruta, tamanoPreviewYandex(maximo))
+		var (
+			lector io.ReadCloser
+			err    error
+		)
+		if strings.TrimSpace(archivo.PreviewURL) != "" {
+			lector, err = a.clienteYandex.DescargarPreviewURL(context.Background(), archivo.PreviewURL)
+		} else {
+			lector, err = a.clienteYandex.DescargarPreview(context.Background(), archivo.Ruta, tamanoPreviewYandex(maximo))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -3326,6 +3334,7 @@ func convertirElementoYandexAArchivo(elemento yandex.ElementoRemoto) modelo.Arch
 		Ruta:         ruta,
 		RutaPadre:    rutaPadreYandex(ruta),
 		Nombre:       nombre,
+		PreviewURL:   strings.TrimSpace(elemento.PreviewURL),
 		Tamano:       elemento.Tamano,
 		Modificado:   elemento.Modificado,
 		Tipo:         elemento.Tipo,

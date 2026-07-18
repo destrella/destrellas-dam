@@ -15,7 +15,8 @@ import (
 func TestClienteRESTListaElementos(t *testing.T) {
 	t.Parallel()
 
-	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var servidor *httptest.Server
+	servidor = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/resources" {
 			t.Fatalf("ruta inesperada: %s", r.URL.Path)
 		}
@@ -24,6 +25,9 @@ func TestClienteRESTListaElementos(t *testing.T) {
 		}
 		if got := r.URL.Query().Get("path"); got != "disk:/" {
 			t.Fatalf("ruta remota inesperada: %q", got)
+		}
+		if got := r.URL.Query().Get("preview_size"); got != "XXXL" {
+			t.Fatalf("tamaño de preview listado inesperado: %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
@@ -44,6 +48,16 @@ func TestClienteRESTListaElementos(t *testing.T) {
 						"md5": "md5-demo",
 						"sha256": "sha-demo",
 						"modified": "2026-07-12T16:30:00+00:00"
+					},
+					{
+						"name": "captura.cr3",
+						"path": "disk:/RAW/captura.cr3",
+						"type": "file",
+						"size": 2097152,
+						"md5": "md5-raw",
+						"sha256": "sha-raw",
+						"preview": "`+servidor.URL+`/preview/raw",
+						"modified": "2026-07-12T18:00:00+00:00"
 					}
 				]
 			}
@@ -61,7 +75,7 @@ func TestClienteRESTListaElementos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListarElementos devolvió error: %v", err)
 	}
-	if len(elementos) != 2 {
+	if len(elementos) != 3 {
 		t.Fatalf("cantidad inesperada de elementos: %d", len(elementos))
 	}
 	if !elementos[0].EsDirectorio || elementos[0].Tipo != modelo.TipoDirectorio {
@@ -72,6 +86,9 @@ func TestClienteRESTListaElementos(t *testing.T) {
 	}
 	if !elementos[1].Modificado.Equal(time.Date(2026, 7, 12, 16, 30, 0, 0, time.FixedZone("", 0))) {
 		t.Fatalf("fecha de modificación inesperada: %v", elementos[1].Modificado)
+	}
+	if elementos[2].Tipo != modelo.TipoImagen || elementos[2].PreviewURL != servidor.URL+"/preview/raw" {
+		t.Fatalf("el elemento RAW remoto debería conservar su preview y tratarse como imagen: %+v", elementos[2])
 	}
 }
 
@@ -188,6 +205,40 @@ func TestClienteRESTDescargaPreviewRemoto(t *testing.T) {
 	}
 	if strings.TrimSpace(string(contenido)) != "preview remoto" {
 		t.Fatalf("preview descargada inesperada: %q", string(contenido))
+	}
+}
+
+func TestClienteRESTDescargaPreviewDesdeURLListada(t *testing.T) {
+	t.Parallel()
+
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/preview/raw" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = io.WriteString(w, "preview listado")
+	}))
+	defer servidor.Close()
+
+	cliente := &ClienteREST{
+		clave:   "token-demo",
+		baseURL: servidor.URL,
+		cliente: servidor.Client(),
+	}
+
+	lector, err := cliente.DescargarPreviewURL(context.Background(), servidor.URL+"/preview/raw")
+	if err != nil {
+		t.Fatalf("DescargarPreviewURL devolvió error: %v", err)
+	}
+	defer lector.Close()
+
+	contenido, err := io.ReadAll(lector)
+	if err != nil {
+		t.Fatalf("no se pudo leer la preview listada: %v", err)
+	}
+	if strings.TrimSpace(string(contenido)) != "preview listado" {
+		t.Fatalf("preview listada inesperada: %q", string(contenido))
 	}
 }
 

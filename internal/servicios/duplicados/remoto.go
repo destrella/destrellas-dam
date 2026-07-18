@@ -371,6 +371,7 @@ func convertirElementoRemotoADuplicado(elemento yandex.ElementoRemoto) modelo.Ar
 		Ruta:         ruta,
 		RutaPadre:    rutaPadreRemotoDuplicados(ruta),
 		Nombre:       nombre,
+		PreviewURL:   strings.TrimSpace(elemento.PreviewURL),
 		Tamano:       elemento.Tamano,
 		Modificado:   elemento.Modificado,
 		Tipo:         elemento.Tipo,

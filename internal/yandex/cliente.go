@@ -26,6 +26,7 @@ const (
 type ElementoRemoto struct {
 	Ruta         string
 	Nombre       string
+	PreviewURL   string
 	Tamano       int64
 	Tipo         modelo.TipoArchivo
 	EsDirectorio bool
@@ -41,6 +42,7 @@ type Cliente interface {
 	ListarElementos(ctx context.Context, ruta string, limite, desplazamiento int) ([]ElementoRemoto, error)
 	Descargar(ctx context.Context, ruta string) (io.ReadCloser, error)
 	DescargarPreview(ctx context.Context, ruta, tamano string) (io.ReadCloser, error)
+	DescargarPreviewURL(ctx context.Context, href string) (io.ReadCloser, error)
 	Mover(ctx context.Context, origen, destino string) error
 	EnviarAPapelera(ctx context.Context, ruta string) error
 }
@@ -100,6 +102,11 @@ func (c *ClienteNulo) DescargarPreview(_ context.Context, _ string, _ string) (i
 	return nil, ErrNoImplementado
 }
 
+// DescargarPreviewURL responde con un error explicito.
+func (c *ClienteNulo) DescargarPreviewURL(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, ErrNoImplementado
+}
+
 // Mover responde con un error explicito.
 func (c *ClienteNulo) Mover(_ context.Context, _ string, _ string) error {
 	return ErrNoImplementado
@@ -151,6 +158,19 @@ func (c *ClienteREST) DescargarPreview(ctx context.Context, ruta, tamano string)
 		return nil, err
 	}
 	return c.descargarDesdeURL(ctx, href, "no se pudo descargar la vista previa remota desde Yandex.Disk")
+}
+
+// DescargarPreviewURL descarga una vista previa usando la URL ya entregada por
+// el listado remoto de Yandex.Disk.
+func (c *ClienteREST) DescargarPreviewURL(ctx context.Context, href string) (io.ReadCloser, error) {
+	if !c.Configurado() {
+		return nil, ErrNoImplementado
+	}
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return nil, errors.New("la URL de vista previa remota está vacía")
+	}
+	return c.descargarDesdeURL(ctx, href, "no se pudo descargar la vista previa remota desde la URL listada por Yandex.Disk")
 }
 
 // Mover traslada un archivo o carpeta remota a otra carpeta de Yandex.Disk.
@@ -332,7 +352,7 @@ func (c *ClienteREST) descargarDesdeURL(ctx context.Context, href, mensaje strin
 func (c *ClienteREST) listarPaginaRecursos(ctx context.Context, ruta string, limite, offset int) ([]ElementoRemoto, error) {
 	ruta = normalizarRutaYandex(ruta)
 	endpoint := fmt.Sprintf(
-		"%s/resources?path=%s&limit=%d&offset=%d&fields=_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.size,_embedded.items.md5,_embedded.items.sha256,_embedded.items.modified",
+		"%s/resources?path=%s&limit=%d&offset=%d&preview_size=XXXL&fields=_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.size,_embedded.items.md5,_embedded.items.sha256,_embedded.items.modified,_embedded.items.preview",
 		c.baseURL,
 		url.QueryEscape(ruta),
 		limite,
@@ -403,6 +423,7 @@ type itemRecursoYandex struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
 	Type     string `json:"type"`
+	Preview  string `json:"preview"`
 	Size     int64  `json:"size"`
 	MD5      string `json:"md5"`
 	SHA256   string `json:"sha256"`
@@ -416,6 +437,7 @@ func convertirItemRecurso(item itemRecursoYandex) ElementoRemoto {
 	return ElementoRemoto{
 		Ruta:         ruta,
 		Nombre:       strings.TrimSpace(item.Name),
+		PreviewURL:   strings.TrimSpace(item.Preview),
 		Tamano:       item.Size,
 		EsDirectorio: esDirectorio,
 		Tipo:         modelo.TipoDesdeRuta(ruta, esDirectorio),

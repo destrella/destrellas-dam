@@ -90,6 +90,7 @@ type Archivo struct {
 	Ruta         string
 	RutaPadre    string
 	Nombre       string
+	PreviewURL   string
 	Tamano       int64
 	Modificado   time.Time
 	Tipo         TipoArchivo
@@ -121,7 +122,10 @@ func TipoDesdeRuta(ruta string, esDirectorio bool) TipoArchivo {
 
 	extension := strings.ToLower(filepath.Ext(ruta))
 	switch extension {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".bmp", ".heic", ".heif", ".avif":
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".bmp", ".heic", ".heif", ".avif",
+		".dng", ".raw", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".rw2",
+		".orf", ".pef", ".iiq", ".3fr", ".fff", ".rwl", ".mef", ".mos", ".mrw", ".x3f", ".erf", ".kdc",
+		".dcr", ".bay", ".cap", ".eip":
 		return TipoImagen
 	case ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".mts", ".m2ts", ".3gp":
 		return TipoVideo
