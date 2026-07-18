@@ -7,6 +7,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 )
@@ -46,6 +47,10 @@ func nuevaPaleta() Paleta {
 
 func nuevaTema(paleta Paleta) *material.Theme {
 	tema := material.NewTheme()
+	if coleccion := coleccionFuentesInterfaz(); len(coleccion) > 0 {
+		tema.Shaper = text.NewShaper(text.WithCollection(coleccion))
+	}
+	tema.Face = familiaFuenteInterfaz()
 	tema.Palette = material.Palette{
 		Bg:         paleta.Fondo,
 		Fg:         paleta.Texto,
