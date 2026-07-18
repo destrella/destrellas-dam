@@ -118,6 +118,13 @@ type widgetsSelectorDirectorio struct {
 	Alternar    widget.Clickable
 }
 
+func (a *Aplicacion) cambiarVista(vista tipoVista) {
+	if a.vistaActual == vistaElementoUnico && vista != vistaElementoUnico {
+		a.detenerReproduccionVideo()
+	}
+	a.vistaActual = vista
+}
+
 type estadoSelectorDirectorio struct {
 	Expandido bool
 	Alternar  widget.Clickable
@@ -422,9 +429,11 @@ type Aplicacion struct {
 	botonAlternarVideo           widget.Clickable
 	botonReiniciarVideo          widget.Clickable
 	botonReproducirVideo         widget.Clickable
+	botonLoopVideo               widget.Clickable
 	botonAbrirCarpetaContenedora widget.Clickable
 	botonPreviewVisor            widget.Clickable
 	controlProgresoVideo         widget.Float
+	reproducirVideoEnLoop        bool
 }
 
 // NuevaAplicacion construye la interfaz y sincroniza sus widgets con la configuracion.
@@ -2043,7 +2052,7 @@ func (a *Aplicacion) manejarActivacionElemento(archivo modelo.Archivo, abrirVist
 		return
 	}
 	if abrirVista {
-		a.vistaActual = vistaElementoUnico
+		a.cambiarVista(vistaElementoUnico)
 	}
 	if a.ventana != nil {
 		a.ventana.Invalidate()
@@ -2078,7 +2087,7 @@ func (a *Aplicacion) navegarVisor(desplazamiento int) {
 
 	destino := a.indiceArchivoActivoEnListado() + desplazamiento
 	a.activarArchivo(a.elementos[destino])
-	a.vistaActual = vistaElementoUnico
+	a.cambiarVista(vistaElementoUnico)
 	if a.ventana != nil {
 		a.ventana.Invalidate()
 	}
@@ -2476,7 +2485,7 @@ func (a *Aplicacion) refrescarExploradorTrasAccionArchivo() {
 
 func (a *Aplicacion) prepararEstadoTrasAccionArchivo() {
 	if a.vistaActual == vistaElementoUnico {
-		a.vistaActual = vistaPrincipal
+		a.cambiarVista(vistaPrincipal)
 	}
 	a.tieneArchivoActivo = false
 	a.descartarEdicionRegiones()

@@ -85,21 +85,21 @@ func (a *Aplicacion) dibujarBarraSuperior(gtx layout.Context) layout.Dimensions 
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaPrincipal, "Explorador", a.vistaActual == vistaPrincipal, func() {
-								a.vistaActual = vistaPrincipal
+								a.cambiarVista(vistaPrincipal)
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaElementoUnico, "Visor", a.vistaActual == vistaElementoUnico, func() {
 								if a.tieneArchivoActivo {
-									a.vistaActual = vistaElementoUnico
+									a.cambiarVista(vistaElementoUnico)
 								}
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaDuplicados, "Duplicados", a.vistaActual == vistaDuplicados, func() {
-								a.vistaActual = vistaDuplicados
+								a.cambiarVista(vistaDuplicados)
 								if !a.duplicadosInicializados {
 									a.recargarDuplicados()
 								}
@@ -108,19 +108,19 @@ func (a *Aplicacion) dibujarBarraSuperior(gtx layout.Context) layout.Dimensions 
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaUbicaciones, "Ubicaciones", a.vistaActual == vistaUbicaciones, func() {
-								a.vistaActual = vistaUbicaciones
+								a.cambiarVista(vistaUbicaciones)
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaAsociaciones, "Asociaciones", a.vistaActual == vistaAsociaciones, func() {
-								a.vistaActual = vistaAsociaciones
+								a.cambiarVista(vistaAsociaciones)
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaConfiguracion, "Configuración", a.vistaActual == vistaConfiguracion, func() {
-								a.vistaActual = vistaConfiguracion
+								a.cambiarVista(vistaConfiguracion)
 							})
 						}),
 					)
@@ -1501,9 +1501,16 @@ func (a *Aplicacion) dibujarPreviewInterrogacion(gtx layout.Context) layout.Dime
 
 func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archivo modelo.Archivo, maximoFotograma int) layout.Dimensions {
 	valorAntes := a.controlProgresoVideo.Value
+	arrastrandoAntes := a.controlProgresoVideo.Dragging()
 	iconoReproduccion := a.dibujarIconoPlay
 	if a.reproductorVideo.Reproduciendo {
 		iconoReproduccion = a.dibujarIconoPause
+	}
+	fondoLoop := a.paleta.PanelElevado
+	colorLoop := a.paleta.Texto
+	if a.reproducirVideoEnLoop {
+		fondoLoop = a.paleta.Exito
+		colorLoop = a.paleta.Texto
 	}
 
 	dim := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -1519,6 +1526,12 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 					return a.dibujarBotonAccionIcono(gtx, &a.botonReiniciarVideo, a.paleta.PanelElevado, a.paleta.Texto, func() {
 						a.reiniciarReproductorVideo()
 					}, a.dibujarIconoInicioReproductor)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarBotonAccionIcono(gtx, &a.botonLoopVideo, fondoLoop, colorLoop, func() {
+						a.alternarLoopReproductorVideo()
+					}, a.dibujarIconoLoopVideo)
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -1544,7 +1557,7 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 		}),
 	)
 
-	if valorAntes != a.controlProgresoVideo.Value {
+	if controlVideoFueManipuladoPorUsuario(valorAntes, a.controlProgresoVideo.Value, arrastrandoAntes || a.controlProgresoVideo.Dragging()) {
 		a.actualizarPosicionVideoDesdeControl(maximoFotograma)
 	}
 	if a.reproductorVideo.Fotograma == nil && !a.reproductorVideo.Cargando {
@@ -1564,7 +1577,7 @@ func (a *Aplicacion) dibujarBarraAccionesVisor(gtx layout.Context, archivo model
 				if archivo.EsDirectorio {
 					etiquetaPrincipal = "Volver"
 					accionPrincipal = func() {
-						a.vistaActual = vistaPrincipal
+						a.cambiarVista(vistaPrincipal)
 					}
 				}
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
@@ -1578,7 +1591,7 @@ func (a *Aplicacion) dibujarBarraAccionesVisor(gtx layout.Context, archivo model
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return a.dibujarBotonAccion(gtx, &a.botonAbrirCarpetaContenedora, "Explorador", a.paleta.Panel, a.paleta.Texto, func() {
-							a.vistaActual = vistaPrincipal
+							a.cambiarVista(vistaPrincipal)
 						})
 					}),
 				)
@@ -3485,6 +3498,36 @@ func (a *Aplicacion) dibujarIconoInicioReproductor(gtx layout.Context, colorIcon
 	triangulo.LineTo(f32.Pt(12, 14))
 	triangulo.Close()
 	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: triangulo.End()}.Op())
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoLoopVideo(gtx layout.Context, colorIcono, _ color.NRGBA) layout.Dimensions {
+	base := image.Pt(18, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	var ruta clip.Path
+	ruta.Begin(gtx.Ops)
+	ruta.MoveTo(f32.Pt(2, 5))
+	ruta.LineTo(f32.Pt(13, 5))
+	ruta.LineTo(f32.Pt(11, 3))
+	ruta.MoveTo(f32.Pt(13, 5))
+	ruta.LineTo(f32.Pt(11, 7))
+	ruta.MoveTo(f32.Pt(13, 5))
+	ruta.LineTo(f32.Pt(16, 5))
+	ruta.LineTo(f32.Pt(16, 8))
+	ruta.MoveTo(f32.Pt(16, 11))
+	ruta.LineTo(f32.Pt(5, 11))
+	ruta.LineTo(f32.Pt(7, 9))
+	ruta.MoveTo(f32.Pt(5, 11))
+	ruta.LineTo(f32.Pt(7, 13))
+	ruta.MoveTo(f32.Pt(5, 11))
+	ruta.LineTo(f32.Pt(2, 11))
+	ruta.LineTo(f32.Pt(2, 8))
+	paint.FillShape(gtx.Ops, colorIcono, clip.Stroke{
+		Path:  ruta.End(),
+		Width: 2,
+	}.Op())
 	return layout.Dimensions{Size: objetivo}
 }
 

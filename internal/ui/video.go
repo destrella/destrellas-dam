@@ -50,6 +50,11 @@ func (a *Aplicacion) limpiarReproductorVideo() {
 	a.formatoExtraccionExpandido = false
 }
 
+func (a *Aplicacion) detenerReproduccionVideo() {
+	a.reproductorVideo.Reproduciendo = false
+	a.reproductorVideo.UltimoTick = time.Time{}
+}
+
 func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 	if archivo.Tipo != modelo.TipoVideo || archivo.Ruta == "" {
 		if a.reproductorVideo.Ruta != "" {
@@ -118,10 +123,26 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 			if estado.Cargando && len(estado.Fotogramas) > 0 && posicionObjetivo > estado.FinBuffer {
 				posicionObjetivo = estado.FinBuffer
 			}
+			// Cuando todavía no existe ningún fotograma cargado para el tramo actual,
+			// detenemos el reloj para no "consumir" tiempo antes de poder mostrarlo.
+			if estado.Cargando && len(estado.Fotogramas) == 0 && estado.Fotograma == nil {
+				posicionObjetivo = estado.Posicion
+			}
 			estado.Posicion = posicionObjetivo
 			if estado.Duracion > 0 && estado.Posicion >= estado.Duracion {
-				estado.Posicion = estado.Duracion
-				estado.Reproduciendo = false
+				posicionResuelta, sigueReproduciendo := resolverPosicionFinReproductorVideo(estado.Posicion, estado.Duracion, a.reproducirVideoEnLoop)
+				estado.Posicion = posicionResuelta
+				estado.Reproduciendo = sigueReproduciendo
+				if sigueReproduciendo {
+					estado.Fotograma = nil
+					estado.InstanteFotograma = 0
+					estado.Error = ""
+					estado.InstanteError = 0
+					estado.MaximoError = 0
+					a.invalidarSolicitudesFotogramasVideo()
+					a.descartarBufferFotogramas()
+					a.solicitarLoteFotogramasVideo(archivo, estado.Posicion, maximoBuffer)
+				}
 			}
 			a.sincronizarControlesPosicionVideo()
 		}
@@ -156,8 +177,20 @@ func (a *Aplicacion) alternarReproductorVideo() {
 		return
 	}
 
-	a.reproductorVideo.Reproduciendo = !a.reproductorVideo.Reproduciendo
+	if a.reproductorVideo.Reproduciendo {
+		a.detenerReproduccionVideo()
+		return
+	}
+
+	if a.estaReproductorVideoAlFinal() {
+		a.prepararInicioReproductorVideo(false)
+	}
+
+	a.reproductorVideo.Reproduciendo = true
 	a.reproductorVideo.UltimoTick = time.Time{}
+	if !a.bufferCubreInstante(a.reproductorVideo.Posicion) {
+		a.solicitarLoteFotogramasVideo(a.archivoActivo, a.reproductorVideo.Posicion, a.maximoFotogramaReproductor())
+	}
 }
 
 func (a *Aplicacion) reiniciarReproductorVideo() {
@@ -166,14 +199,12 @@ func (a *Aplicacion) reiniciarReproductorVideo() {
 	}
 
 	a.sincronizarReproductorVideo(a.archivoActivo)
-	a.reproductorVideo.Reproduciendo = false
-	a.reproductorVideo.Posicion = 0
-	a.reproductorVideo.UltimoTick = time.Time{}
-	a.reproductorVideo.Fotogramas = nil
-	a.reproductorVideo.InicioBuffer = 0
-	a.reproductorVideo.FinBuffer = 0
-	a.sincronizarControlesPosicionVideo()
-	a.solicitarFotogramaVideo(a.archivoActivo, 0, maximo(960, a.reproductorVideo.MaximoFotograma))
+	a.detenerReproduccionVideo()
+	a.prepararInicioReproductorVideo(true)
+}
+
+func (a *Aplicacion) alternarLoopReproductorVideo() {
+	a.reproducirVideoEnLoop = !a.reproducirVideoEnLoop
 }
 
 func (a *Aplicacion) actualizarPosicionVideoDesdeControl(maximoFotograma int) {
@@ -182,8 +213,9 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeControl(maximoFotograma int) {
 	}
 
 	a.sincronizarReproductorVideo(a.archivoActivo)
-	a.reproductorVideo.Reproduciendo = false
-	a.reproductorVideo.UltimoTick = time.Time{}
+	a.detenerReproduccionVideo()
+	a.invalidarSolicitudesFotogramasVideo()
+	a.descartarBufferFotogramas()
 	a.reproductorVideo.Posicion = a.posicionDesdeProgresoVideo(a.controlProgresoVideo.Value, a.reproductorVideo.Duracion)
 	a.sincronizarControlesPosicionVideo()
 	if !a.aplicarFotogramaDisponible(a.reproductorVideo.Posicion) {
@@ -197,8 +229,8 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeExtraccion(maximoFotograma int)
 	}
 
 	a.sincronizarReproductorVideo(a.archivoActivo)
-	a.reproductorVideo.Reproduciendo = false
-	a.reproductorVideo.UltimoTick = time.Time{}
+	a.detenerReproduccionVideo()
+	a.invalidarSolicitudesFotogramasVideo()
 	a.reproductorVideo.Posicion = a.posicionDesdeProgresoVideo(a.controlExtraccionFrame.Value, a.reproductorVideo.Duracion)
 	a.descartarBufferFotogramas()
 	a.sincronizarControlesPosicionVideo()
@@ -526,7 +558,9 @@ func (a *Aplicacion) solapeLoteBuffer() time.Duration {
 
 func (a *Aplicacion) sincronizarControlesPosicionVideo() {
 	valor := a.valorProgresoVideo(a.reproductorVideo.Posicion, a.reproductorVideo.Duracion)
-	a.controlProgresoVideo.Value = valor
+	if !a.controlProgresoVideo.Dragging() {
+		a.controlProgresoVideo.Value = valor
+	}
 	if !a.controlExtraccionFrame.Dragging() {
 		a.controlExtraccionFrame.Value = valor
 	}
@@ -577,10 +611,61 @@ func (a *Aplicacion) margenFinalLoteVideo() time.Duration {
 	return margen
 }
 
+func (a *Aplicacion) estaReproductorVideoAlFinal() bool {
+	if a.reproductorVideo.Duracion <= 0 {
+		return false
+	}
+	return a.reproductorVideo.Posicion >= a.reproductorVideo.Duracion
+}
+
+func (a *Aplicacion) prepararInicioReproductorVideo(cargarFotograma bool) {
+	a.reproductorVideo.Posicion = 0
+	a.reproductorVideo.UltimoTick = time.Time{}
+	a.reproductorVideo.Error = ""
+	a.reproductorVideo.InstanteError = 0
+	a.reproductorVideo.MaximoError = 0
+	a.reproductorVideo.Fotograma = nil
+	a.reproductorVideo.InstanteFotograma = 0
+	a.invalidarSolicitudesFotogramasVideo()
+	a.descartarBufferFotogramas()
+	a.sincronizarControlesPosicionVideo()
+	if cargarFotograma && a.tieneArchivoActivo && a.archivoActivo.Tipo == modelo.TipoVideo {
+		a.solicitarFotogramaVideo(a.archivoActivo, 0, a.maximoFotogramaReproductor())
+	}
+}
+
+func resolverPosicionFinReproductorVideo(posicionObjetivo, duracion time.Duration, enLoop bool) (time.Duration, bool) {
+	if duracion <= 0 || posicionObjetivo < duracion {
+		return posicionObjetivo, true
+	}
+	if enLoop {
+		// Reiniciar exactamente desde el inicio evita saltarnos los primeros
+		// fotogramas visibles del siguiente ciclo.
+		return 0, true
+	}
+	return duracion, false
+}
+
 func (a *Aplicacion) descartarBufferFotogramas() {
 	a.reproductorVideo.Fotogramas = nil
 	a.reproductorVideo.InicioBuffer = 0
 	a.reproductorVideo.FinBuffer = 0
+}
+
+func (a *Aplicacion) invalidarSolicitudesFotogramasVideo() {
+	a.reproductorVideo.Cargando = false
+	a.reproductorVideo.TienePendiente = false
+	a.reproductorVideo.InstantePendiente = 0
+	a.reproductorVideo.MaximoPendiente = 0
+	a.reproductorVideo.VersionSolicitud++
+}
+
+func (a *Aplicacion) maximoFotogramaReproductor() int {
+	return maximo(960, a.reproductorVideo.MaximoFotograma)
+}
+
+func controlVideoFueManipuladoPorUsuario(valorAnterior, valorActual float32, arrastrando bool) bool {
+	return valorAnterior != valorActual && arrastrando
 }
 
 func (a *Aplicacion) valorProgresoVideo(posicion, duracion time.Duration) float32 {
