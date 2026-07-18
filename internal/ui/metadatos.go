@@ -164,10 +164,7 @@ func (a *Aplicacion) sincronizarEditoresMetadatos(archivo modelo.Archivo) {
 		partirListaCSV(strings.Join(archivo.Metadatos.Sujetos, ", ")),
 		partirListaCSV(strings.Join(archivo.Metadatos.PalabrasClave, ", "))...,
 	))
-	sugeridas := []string(nil)
-	if len(palabrasBase) == 0 {
-		sugeridas = sugerenciasPalabrasArchivo(archivo, palabrasBase)
-	}
+	sugeridas := sugerenciasPalabrasArchivo(archivo, palabrasBase, a.asociacionesTexto)
 	a.formularioMetadatos.PalabrasSugeridas = sugeridas
 	palabrasVisibles := append([]string(nil), palabrasBase...)
 	palabrasVisibles = append(palabrasVisibles, sugeridas...)
@@ -428,7 +425,7 @@ func inferirFechaHoraDesdeNombre(nombre string) (fecha, hora, zona string, ok bo
 	return "", "", "", false
 }
 
-func sugerenciasPalabrasArchivo(archivo modelo.Archivo, existentes []string) []string {
+func sugerenciasPalabrasArchivo(archivo modelo.Archivo, existentes []string, asociaciones []modelo.AsociacionTexto) []string {
 	vistos := make(map[string]struct{}, len(existentes))
 	for _, valor := range existentes {
 		valor = strings.TrimSpace(strings.ToLower(valor))
@@ -458,6 +455,9 @@ func sugerenciasPalabrasArchivo(archivo modelo.Archivo, existentes []string) []s
 	agregar(archivo.Metadatos.Ubicacion, &sugeridas)
 	for _, region := range archivo.Metadatos.Regiones {
 		agregar(region.Nombre, &sugeridas)
+	}
+	for _, sugerida := range sugerenciasAsociacionesTexto(archivo.NombreVisible(), existentes, asociaciones) {
+		agregar(sugerida, &sugeridas)
 	}
 	return sugeridas
 }

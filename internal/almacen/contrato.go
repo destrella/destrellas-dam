@@ -17,6 +17,9 @@ type Repositorio interface {
 	BuscarEtiquetas(ctx context.Context, consulta string, limite int) ([]string, error)
 	ListarUbicaciones(ctx context.Context, limite int) ([]string, error)
 	BuscarUbicaciones(ctx context.Context, consulta string, limite int) ([]string, error)
+	ListarAsociacionesTexto(ctx context.Context, limite int) ([]modelo.AsociacionTexto, error)
+	GuardarAsociacionTexto(ctx context.Context, id int64, originales, sugeridas []string) (modelo.AsociacionTexto, error)
+	EliminarAsociacionTexto(ctx context.Context, id int64) error
 	ListarUbicacionesGuardadas(ctx context.Context, limite int) ([]modelo.UbicacionGuardada, error)
 	ListarUsosUbicacionGuardada(ctx context.Context, nombre string, limite int) ([]modelo.UsoUbicacionGuardada, error)
 	GuardarRelacionUbicacion(ctx context.Context, origen, destino string) error

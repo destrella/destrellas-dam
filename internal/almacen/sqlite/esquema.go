@@ -78,5 +78,30 @@ CREATE TABLE IF NOT EXISTS ubicaciones_relaciones (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ubicaciones_relaciones_destino ON ubicaciones_relaciones (destino_normalizado);
+
+CREATE TABLE IF NOT EXISTS asociaciones_texto (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	actualizado_unix INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS asociaciones_texto_originales (
+	asociacion_id INTEGER NOT NULL,
+	valor TEXT NOT NULL,
+	valor_normalizado TEXT NOT NULL UNIQUE,
+	PRIMARY KEY (asociacion_id, valor_normalizado),
+	FOREIGN KEY (asociacion_id) REFERENCES asociaciones_texto (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_asociaciones_texto_originales_asociacion ON asociaciones_texto_originales (asociacion_id);
+
+CREATE TABLE IF NOT EXISTS asociaciones_texto_sugeridas (
+	asociacion_id INTEGER NOT NULL,
+	valor TEXT NOT NULL,
+	valor_normalizado TEXT NOT NULL,
+	PRIMARY KEY (asociacion_id, valor_normalizado),
+	FOREIGN KEY (asociacion_id) REFERENCES asociaciones_texto (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_asociaciones_texto_sugeridas_asociacion ON asociaciones_texto_sugeridas (asociacion_id);
 `
 )

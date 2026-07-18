@@ -59,6 +59,8 @@ func (a *Aplicacion) dibujar(gtx layout.Context) layout.Dimensions {
 							return a.dibujarVistaDuplicados(gtx)
 						case vistaUbicaciones:
 							return a.dibujarVistaUbicaciones(gtx)
+						case vistaAsociaciones:
+							return a.dibujarVistaAsociaciones(gtx)
 						case vistaConfiguracion:
 							return a.dibujarVistaConfiguracion(gtx)
 						default:
@@ -107,6 +109,12 @@ func (a *Aplicacion) dibujarBarraSuperior(gtx layout.Context) layout.Dimensions 
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return a.dibujarBotonNavegacion(gtx, &a.botonVistaUbicaciones, "Ubicaciones", a.vistaActual == vistaUbicaciones, func() {
 								a.vistaActual = vistaUbicaciones
+							})
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarBotonNavegacion(gtx, &a.botonVistaAsociaciones, "Asociaciones", a.vistaActual == vistaAsociaciones, func() {
+								a.vistaActual = vistaAsociaciones
 							})
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),

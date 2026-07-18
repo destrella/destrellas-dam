@@ -39,6 +39,7 @@ const (
 	vistaElementoUnico tipoVista = "elemento_unico"
 	vistaDuplicados    tipoVista = "duplicados"
 	vistaUbicaciones   tipoVista = "ubicaciones"
+	vistaAsociaciones  tipoVista = "asociaciones"
 	vistaConfiguracion tipoVista = "configuracion"
 )
 
@@ -154,6 +155,14 @@ type estadoBusquedaLateral struct {
 	Version  int
 }
 
+type tipoFiltroAsociacionTexto string
+
+const (
+	filtroAsociacionTextoTodas      tipoFiltroAsociacionTexto = "todas"
+	filtroAsociacionTextoOriginales tipoFiltroAsociacionTexto = "originales"
+	filtroAsociacionTextoSugeridas  tipoFiltroAsociacionTexto = "sugeridas"
+)
+
 // Aplicacion mantiene el estado inmediato de la UI.
 type Aplicacion struct {
 	tema   *material.Theme
@@ -205,6 +214,9 @@ type Aplicacion struct {
 	ubicacionSeleccionada     string
 	usosUbicacionSeleccionada []modelo.UsoUbicacionGuardada
 	cargandoUsosUbicacion     bool
+	asociacionesTexto         []modelo.AsociacionTexto
+	asociacionTextoActivaID   int64
+	filtroAsociacionesTexto   tipoFiltroAsociacionTexto
 	busquedaEtiquetas         estadoBusquedaLateral
 	busquedaUbicaciones       estadoBusquedaLateral
 
@@ -245,6 +257,7 @@ type Aplicacion struct {
 	botonVistaElementoUnico widget.Clickable
 	botonVistaDuplicados    widget.Clickable
 	botonVistaUbicaciones   widget.Clickable
+	botonVistaAsociaciones  widget.Clickable
 	botonVistaConfiguracion widget.Clickable
 
 	// Pestañas laterales.
@@ -254,27 +267,28 @@ type Aplicacion struct {
 	botonPestanaYandex      widget.Clickable
 
 	// Filtros.
-	mostrarOcultos         widget.Bool
-	ocultarCarpetas        widget.Bool
-	soloMultimedia         widget.Bool
-	soloVideos             widget.Bool
-	soloImagenes           widget.Bool
-	soloAudio              widget.Bool
-	recursivo              widget.Bool
-	botonGaleria           widget.Clickable
-	botonLista             widget.Clickable
-	botonOrdenAZ           widget.Clickable
-	botonOrdenZA           widget.Clickable
-	botonOrdenAntiguos     widget.Clickable
-	botonOrdenNuevos       widget.Clickable
-	botonSeleccionarTodo   widget.Clickable
-	botonDeseleccionarTodo widget.Clickable
-	editorFiltroEtiquetas  widget.Editor
-	editorFiltroLugares    widget.Editor
-	selectorActivoLocal    estadoSelectorDirectorio
-	selectorActivoRemoto   estadoSelectorDirectorio
-	selectorLoteLocal      estadoSelectorDirectorio
-	selectorLoteRemoto     estadoSelectorDirectorio
+	mostrarOcultos           widget.Bool
+	ocultarCarpetas          widget.Bool
+	soloMultimedia           widget.Bool
+	soloVideos               widget.Bool
+	soloImagenes             widget.Bool
+	soloAudio                widget.Bool
+	recursivo                widget.Bool
+	botonGaleria             widget.Clickable
+	botonLista               widget.Clickable
+	botonOrdenAZ             widget.Clickable
+	botonOrdenZA             widget.Clickable
+	botonOrdenAntiguos       widget.Clickable
+	botonOrdenNuevos         widget.Clickable
+	botonSeleccionarTodo     widget.Clickable
+	botonDeseleccionarTodo   widget.Clickable
+	editorFiltroEtiquetas    widget.Editor
+	editorFiltroLugares      widget.Editor
+	editorFiltroAsociaciones widget.Editor
+	selectorActivoLocal      estadoSelectorDirectorio
+	selectorActivoRemoto     estadoSelectorDirectorio
+	selectorLoteLocal        estadoSelectorDirectorio
+	selectorLoteRemoto       estadoSelectorDirectorio
 
 	// Vistas principales.
 	listaLateral              widget.List
@@ -282,6 +296,7 @@ type Aplicacion struct {
 	listaDetalle              widget.List
 	listaDuplicados           widget.List
 	listaUbicaciones          widget.List
+	listaAsociaciones         widget.List
 	listaUsosUbicacion        widget.List
 	listaRelacionUbicacion    widget.List
 	listaConfiguracion        widget.List
@@ -318,21 +333,23 @@ type Aplicacion struct {
 	botonDescargarLote      widget.Clickable
 
 	// Editores de metadatos.
-	editorFecha             widget.Editor
-	editorHora              widget.Editor
-	editorZonaHoraria       widget.Editor
-	editorPalabras          widget.Editor
-	editorUbicacion         widget.Editor
-	editorFiltroUbicaciones widget.Editor
-	editorRelacionUbicacion widget.Editor
-	editorComentario        widget.Editor
-	editorCopyright         widget.Editor
-	editorGPSLatitud        widget.Editor
-	editorGPSLongitud       widget.Editor
-	editorMake              widget.Editor
-	editorModelo            widget.Editor
-	editorSoftware          widget.Editor
-	formularioMetadatos     estadoFormularioMetadatos
+	editorFecha                widget.Editor
+	editorHora                 widget.Editor
+	editorZonaHoraria          widget.Editor
+	editorPalabras             widget.Editor
+	editorUbicacion            widget.Editor
+	editorFiltroUbicaciones    widget.Editor
+	editorRelacionUbicacion    widget.Editor
+	editorAsociacionOriginales widget.Editor
+	editorAsociacionSugeridas  widget.Editor
+	editorComentario           widget.Editor
+	editorCopyright            widget.Editor
+	editorGPSLatitud           widget.Editor
+	editorGPSLongitud          widget.Editor
+	editorMake                 widget.Editor
+	editorModelo               widget.Editor
+	editorSoftware             widget.Editor
+	formularioMetadatos        estadoFormularioMetadatos
 
 	// Vista de elemento único.
 	botonVisorAnterior             widget.Clickable
@@ -371,28 +388,34 @@ type Aplicacion struct {
 	botonRecargarDuplicados     widget.Clickable
 
 	// Configuracion.
-	editorCarpetaInicial          widget.Editor
-	editorCarpetaArchivado        widget.Editor
-	editorClaveYandex             widget.Editor
-	editorRutaEscaneoMetadatos    widget.Editor
-	configMostrarOcultos          widget.Bool
-	configOcultarCarpetas         widget.Bool
-	configSoloMultimedia          widget.Bool
-	configSoloVideos              widget.Bool
-	configSoloImagenes            widget.Bool
-	configSoloAudio               widget.Bool
-	configRecursivo               widget.Bool
-	configOrdenPorFecha           widget.Bool
-	configOrdenDescendente        widget.Bool
-	botonConfigOrdenAZ            widget.Clickable
-	botonConfigOrdenZA            widget.Clickable
-	botonConfigOrdenAntiguos      widget.Clickable
-	botonConfigOrdenNuevos        widget.Clickable
-	botonEscanearMetadatos        widget.Clickable
-	botonPausarEscaneo            widget.Clickable
-	botonGuardarRelacionUbicacion widget.Clickable
-	botonQuitarRelacionUbicacion  widget.Clickable
-	botonGuardarConfig            widget.Clickable
+	editorCarpetaInicial              widget.Editor
+	editorCarpetaArchivado            widget.Editor
+	editorClaveYandex                 widget.Editor
+	editorRutaEscaneoMetadatos        widget.Editor
+	configMostrarOcultos              widget.Bool
+	configOcultarCarpetas             widget.Bool
+	configSoloMultimedia              widget.Bool
+	configSoloVideos                  widget.Bool
+	configSoloImagenes                widget.Bool
+	configSoloAudio                   widget.Bool
+	configRecursivo                   widget.Bool
+	configOrdenPorFecha               widget.Bool
+	configOrdenDescendente            widget.Bool
+	botonConfigOrdenAZ                widget.Clickable
+	botonConfigOrdenZA                widget.Clickable
+	botonConfigOrdenAntiguos          widget.Clickable
+	botonConfigOrdenNuevos            widget.Clickable
+	botonFiltroAsociacionesTodas      widget.Clickable
+	botonFiltroAsociacionesOriginales widget.Clickable
+	botonFiltroAsociacionesSugeridas  widget.Clickable
+	botonNuevaAsociacionTexto         widget.Clickable
+	botonGuardarAsociacionTexto       widget.Clickable
+	botonEliminarAsociacionTexto      widget.Clickable
+	botonEscanearMetadatos            widget.Clickable
+	botonPausarEscaneo                widget.Clickable
+	botonGuardarRelacionUbicacion     widget.Clickable
+	botonQuitarRelacionUbicacion      widget.Clickable
+	botonGuardarConfig                widget.Clickable
 
 	botonAlternarVideo           widget.Clickable
 	botonReiniciarVideo          widget.Clickable
@@ -423,6 +446,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 		rutaLibraryUsuario:          filepath.Join(rutaUsuario, "Library"),
 		vistaActual:                 vistaPrincipal,
 		pestanaLateral:              pestanaDirectorios,
+		filtroAsociacionesTexto:     filtroAsociacionTextoTodas,
 		filtros:                     dependencias.Configuracion.FiltrosPorDefecto,
 		carpetaSeleccionada:         dependencias.Configuracion.CarpetaInicial,
 		origenListado:               origenListadoCarpeta,
@@ -451,6 +475,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.listaDetalle.Axis = layout.Vertical
 	appUI.listaDuplicados.Axis = layout.Vertical
 	appUI.listaUbicaciones.Axis = layout.Vertical
+	appUI.listaAsociaciones.Axis = layout.Vertical
 	appUI.listaUsosUbicacion.Axis = layout.Vertical
 	appUI.listaRelacionUbicacion.Axis = layout.Vertical
 	appUI.listaConfiguracion.Axis = layout.Vertical
@@ -490,8 +515,11 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.formatoExtraccionFrame = "webp"
 	appUI.editorFiltroEtiquetas.SingleLine = true
 	appUI.editorFiltroLugares.SingleLine = true
+	appUI.editorFiltroAsociaciones.SingleLine = true
 	appUI.editorFiltroUbicaciones.SingleLine = true
 	appUI.editorRelacionUbicacion.SingleLine = true
+	appUI.editorAsociacionOriginales.SingleLine = true
+	appUI.editorAsociacionSugeridas.SingleLine = true
 	appUI.formularioMetadatos.listaAtributoExtendido.Axis = layout.Vertical
 	appUI.formularioMetadatos.listaUbicacionesSugeridas.Axis = layout.Vertical
 	appUI.formularioMetadatos.listaSalidaExiftool.Axis = layout.Vertical
@@ -535,6 +563,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.reconstruirArbol()
 	appUI.reiniciarListado()
 	appUI.recargarColeccionesLaterales()
+	appUI.recargarAsociacionesTexto()
 
 	return appUI
 }
