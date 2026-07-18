@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +176,66 @@ func (a *Almacen) EliminarArchivo(ctx context.Context, ruta string) error {
 		return fmt.Errorf("no se pudo eliminar el archivo %q del catalogo: %w", ruta, err)
 	}
 	return nil
+}
+
+// LimpiarRegistrosLocalesAusentes elimina del catálogo los elementos locales
+// que ya no existen en el sistema de archivos.
+func (a *Almacen) LimpiarRegistrosLocalesAusentes(ctx context.Context) (int, error) {
+	if a == nil || a.base == nil {
+		return 0, errors.New("almacen sqlite no inicializado")
+	}
+
+	filas, err := a.base.QueryContext(ctx, `
+SELECT ruta
+FROM archivos
+WHERE origen = 'local'
+ORDER BY ruta ASC`)
+	if err != nil {
+		return 0, fmt.Errorf("no se pudieron consultar los registros locales para depuración: %w", err)
+	}
+	defer filas.Close()
+
+	rutasAusentes := make([]string, 0, 64)
+	for filas.Next() {
+		var ruta string
+		if err := filas.Scan(&ruta); err != nil {
+			return 0, fmt.Errorf("no se pudo leer una ruta local durante la depuración: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if _, err := os.Stat(ruta); err == nil {
+			continue
+		} else if errors.Is(err, os.ErrNotExist) {
+			rutasAusentes = append(rutasAusentes, ruta)
+		}
+	}
+	if err := filas.Err(); err != nil {
+		return 0, fmt.Errorf("no se pudo recorrer el catálogo local para depuración: %w", err)
+	}
+	if len(rutasAusentes) == 0 {
+		return 0, nil
+	}
+
+	a.muEscritura.Lock()
+	defer a.muEscritura.Unlock()
+
+	tx, err := a.base.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("no se pudo iniciar la transacción de depuración de registros locales: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, ruta := range rutasAusentes {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM archivos WHERE ruta = ?`, ruta); err != nil {
+			return 0, fmt.Errorf("no se pudo eliminar el registro local ausente %q: %w", ruta, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("no se pudo confirmar la depuración de registros locales: %w", err)
+	}
+
+	return len(rutasAusentes), nil
 }
 
 // ObtenerArchivoPorRuta recupera un archivo conocido por la base.

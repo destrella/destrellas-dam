@@ -2015,6 +2015,10 @@ func (a *Aplicacion) dibujarControlesDuplicados(gtx layout.Context) layout.Dimen
 	if a.cargandoDuplicados {
 		etiquetaRecarga = "Actualizando..."
 	}
+	etiquetaLimpieza := "Depurar locales ausentes"
+	if a.limpiandoDuplicados {
+		etiquetaLimpieza = "Depurando ausentes..."
+	}
 
 	controles := []layout.Widget{
 		func(gtx layout.Context) layout.Dimensions {
@@ -2041,6 +2045,11 @@ func (a *Aplicacion) dibujarControlesDuplicados(gtx layout.Context) layout.Dimen
 			})
 		},
 		func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarBotonAccion(gtx, &a.botonLimpiarDuplicados, etiquetaLimpieza, a.paleta.PanelElevado, a.paleta.Texto, func() {
+				a.limpiarRegistrosLocalesAusentesDuplicados()
+			})
+		},
+		func(gtx layout.Context) layout.Dimensions {
 			return material.CheckBox(a.tema, &a.soloDuplicadosMultimedia, "Solo grupos multimedia").Layout(gtx)
 		},
 	}
@@ -2049,11 +2058,26 @@ func (a *Aplicacion) dibujarControlesDuplicados(gtx layout.Context) layout.Dimen
 			return a.dibujarFlujoControles(gtx, controles)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !a.cargandoDuplicados {
+			if !a.limpiandoDuplicados && !a.cargandoDuplicados {
 				return layout.Dimensions{}
 			}
 			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return a.dibujarTextoSecundario(gtx, "Actualizando grupos de duplicados...")
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !a.limpiandoDuplicados {
+							return layout.Dimensions{}
+						}
+						return a.dibujarTextoSecundario(gtx, "Depurando rutas locales ausentes del catálogo...")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !a.cargandoDuplicados {
+							return layout.Dimensions{}
+						}
+						return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarTextoSecundario(gtx, "Actualizando grupos de duplicados...")
+						})
+					}),
+				)
 			})
 		}),
 	)

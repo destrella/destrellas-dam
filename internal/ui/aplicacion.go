@@ -237,6 +237,7 @@ type Aplicacion struct {
 	duplicadosInicializados    bool
 	progresoDuplicados         indexador.EventoProgreso
 	cargandoDuplicados         bool
+	limpiandoDuplicados        bool
 	cancelarCargaDuplicados    context.CancelFunc
 	versionCargaDuplicados     int
 	cancelarDescubrimiento     context.CancelFunc
@@ -386,6 +387,7 @@ type Aplicacion struct {
 	botonOrdenEspacio           widget.Clickable
 	botonOrdenAlfabetico        widget.Clickable
 	botonRecargarDuplicados     widget.Clickable
+	botonLimpiarDuplicados      widget.Clickable
 
 	// Configuracion.
 	editorCarpetaInicial              widget.Editor
@@ -1564,6 +1566,37 @@ func (a *Aplicacion) recargarDuplicados() {
 			a.grupoWidgets = make(map[string]*widgetsGrupoDuplicado)
 			a.sincronizarPreviewDuplicadosConGrupos(grupos)
 			a.establecerEstado(fmt.Sprintf("%d grupos de duplicados cargados", len(grupos)), nil)
+		})
+	}()
+}
+
+func (a *Aplicacion) limpiarRegistrosLocalesAusentesDuplicados() {
+	if a.servicioDuplicados == nil {
+		a.establecerEstado("No hay un servicio de duplicados disponible para depurar registros locales", nil)
+		return
+	}
+	if a.limpiandoDuplicados {
+		return
+	}
+
+	a.limpiandoDuplicados = true
+	a.establecerEstado("Verificando rutas locales ausentes en el catálogo", nil)
+
+	go func() {
+		eliminados, err := a.servicioDuplicados.LimpiarRegistrosLocalesAusentes(context.Background())
+		a.encolarActualizacion(func() {
+			a.limpiandoDuplicados = false
+			if err != nil {
+				a.establecerEstado("No se pudieron depurar las rutas locales ausentes", err)
+				return
+			}
+
+			if eliminados == 0 {
+				a.establecerEstado("No se encontraron rutas locales ausentes para depurar", nil)
+			} else {
+				a.establecerEstado(fmt.Sprintf("Se depuraron %d rutas locales ausentes del catálogo", eliminados), nil)
+			}
+			a.recargarDuplicados()
 		})
 	}()
 }

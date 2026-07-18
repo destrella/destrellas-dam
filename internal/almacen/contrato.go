@@ -11,6 +11,7 @@ type Repositorio interface {
 	Cerrar() error
 	GuardarArchivo(ctx context.Context, archivo modelo.Archivo) error
 	EliminarArchivo(ctx context.Context, ruta string) error
+	LimpiarRegistrosLocalesAusentes(ctx context.Context) (int, error)
 	ObtenerArchivoPorRuta(ctx context.Context, ruta string) (modelo.Archivo, error)
 	ListarPalabrasClave(ctx context.Context, limite int) ([]string, error)
 	ListarEtiquetas(ctx context.Context, limite int) ([]string, error)

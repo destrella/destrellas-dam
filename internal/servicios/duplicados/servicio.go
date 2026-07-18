@@ -51,3 +51,9 @@ func (s *Servicio) ListarGrupos(ctx context.Context, tipo modelo.TipoCoincidenci
 func (s *Servicio) Estadisticas(ctx context.Context) (modelo.EstadisticasDuplicados, error) {
 	return s.repo.ObtenerEstadisticasDuplicados(ctx)
 }
+
+// LimpiarRegistrosLocalesAusentes depura entradas locales que ya no existen
+// físicamente para evitar grupos huérfanos en la vista de duplicados.
+func (s *Servicio) LimpiarRegistrosLocalesAusentes(ctx context.Context) (int, error) {
+	return s.repo.LimpiarRegistrosLocalesAusentes(ctx)
+}

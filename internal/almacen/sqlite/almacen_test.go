@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -221,6 +222,79 @@ func TestListarGruposDuplicadosOmiteArchivosVacios(t *testing.T) {
 	}
 	if len(grupos[0].Elementos) != 2 {
 		t.Fatalf("el grupo válido debería contener 2 elementos, se obtuvo %+v", grupos[0].Elementos)
+	}
+}
+
+func TestLimpiarRegistrosLocalesAusentesEliminaEntradasSinArchivo(t *testing.T) {
+	t.Parallel()
+
+	rutaBase := filepath.Join(t.TempDir(), "catalogo.sqlite")
+	almacen, err := Nuevo(rutaBase)
+	if err != nil {
+		t.Fatalf("no se pudo crear el almacén sqlite de prueba: %v", err)
+	}
+	defer almacen.Cerrar()
+
+	directorio := t.TempDir()
+	rutaExistente := filepath.Join(directorio, "foto-existente.jpg")
+	rutaAusente := filepath.Join(directorio, "foto-ausente.jpg")
+	if err := os.WriteFile(rutaExistente, []byte("contenido"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo existente de prueba: %v", err)
+	}
+
+	archivos := []modelo.Archivo{
+		{
+			Ruta:       rutaExistente,
+			RutaPadre:  directorio,
+			Nombre:     filepath.Base(rutaExistente),
+			Tamano:     1200,
+			Modificado: time.Unix(10, 0),
+			Origen:     modelo.OrigenLocal,
+			Tipo:       modelo.TipoImagen,
+			Hashes: modelo.HashesArchivo{
+				MD5: "grupo-prueba",
+			},
+		},
+		{
+			Ruta:       rutaAusente,
+			RutaPadre:  directorio,
+			Nombre:     filepath.Base(rutaAusente),
+			Tamano:     1200,
+			Modificado: time.Unix(20, 0),
+			Origen:     modelo.OrigenLocal,
+			Tipo:       modelo.TipoImagen,
+			Hashes: modelo.HashesArchivo{
+				MD5: "grupo-prueba",
+			},
+		},
+	}
+	for _, archivo := range archivos {
+		if err := almacen.GuardarArchivo(context.Background(), archivo); err != nil {
+			t.Fatalf("no se pudo guardar el archivo de prueba %q: %v", archivo.Ruta, err)
+		}
+	}
+
+	eliminados, err := almacen.LimpiarRegistrosLocalesAusentes(context.Background())
+	if err != nil {
+		t.Fatalf("no se pudieron depurar los registros locales ausentes: %v", err)
+	}
+	if eliminados != 1 {
+		t.Fatalf("se esperaba depurar 1 ruta ausente, se obtuvieron %d", eliminados)
+	}
+
+	if _, err := almacen.ObtenerArchivoPorRuta(context.Background(), rutaAusente); err == nil {
+		t.Fatal("la ruta ausente debería haberse eliminado del catálogo")
+	}
+	if _, err := almacen.ObtenerArchivoPorRuta(context.Background(), rutaExistente); err != nil {
+		t.Fatalf("la ruta existente debería permanecer en el catálogo: %v", err)
+	}
+
+	grupos, err := almacen.ListarGruposDuplicados(context.Background(), modelo.CoincidenciaExacta, modelo.CategoriaDuplicadosLocales, modelo.OrdenAlfabetico, 10, 0)
+	if err != nil {
+		t.Fatalf("no se pudieron listar los grupos duplicados tras depurar: %v", err)
+	}
+	if len(grupos) != 0 {
+		t.Fatalf("no deberían quedar grupos locales tras eliminar la ruta ausente, se obtuvo %+v", grupos)
 	}
 }
 
