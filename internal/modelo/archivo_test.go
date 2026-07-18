@@ -19,3 +19,11 @@ func TestTipoDesdeRutaReconoceExtensionesRawComoImagen(t *testing.T) {
 		}
 	}
 }
+
+func TestTipoDesdeRutaReconoceWebMComoVideo(t *testing.T) {
+	t.Parallel()
+
+	if tipo := TipoDesdeRuta("/tmp/clip-prueba.webm", false); tipo != TipoVideo {
+		t.Fatalf("la ruta .webm debería clasificarse como video, se obtuvo %q", tipo)
+	}
+}

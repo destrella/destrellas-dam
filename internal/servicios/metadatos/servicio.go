@@ -1,6 +1,7 @@
 package metadatos
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -91,6 +92,14 @@ func (s *Servicio) AnalizarArchivo(ctx context.Context, archivo modelo.Archivo) 
 			archivo.Ancho = ancho
 			archivo.Alto = alto
 		} else if primerError == nil {
+			primerError = err
+		}
+	}
+
+	if archivo.Tipo == modelo.TipoVideo && archivo.Duracion <= 0 {
+		if duracion, err := s.duracionVideo(ctx, archivo.Ruta); err == nil && duracion > 0 {
+			archivo.Duracion = time.Duration(duracion * float64(time.Second))
+		} else if primerError == nil && err != nil {
 			primerError = err
 		}
 	}
@@ -1220,13 +1229,19 @@ func (s *Servicio) duracionVideo(ctx context.Context, ruta string) (float64, err
 	)
 	salida, err := comando.Output()
 	if err != nil {
-		return 0, fmt.Errorf("no se pudo obtener la duracion del video: %w", err)
+		return s.duracionVideoDesdePaquetes(ctx, ruta, fmt.Errorf("no se pudo obtener la duracion del video: %w", err))
 	}
 	valor, err := strconv.ParseFloat(strings.TrimSpace(string(salida)), 64)
-	if err != nil {
-		return 0, fmt.Errorf("duracion de video invalida: %w", err)
+	if err == nil && valor > 0 {
+		return valor, nil
 	}
-	return valor, nil
+	var errDuracion error
+	if err != nil {
+		errDuracion = fmt.Errorf("duracion de video invalida: %w", err)
+	} else {
+		errDuracion = errors.New("duracion de video vacia o cero")
+	}
+	return s.duracionVideoDesdePaquetes(ctx, ruta, errDuracion)
 }
 
 func (s *Servicio) extraerMiniaturaVideo(ctx context.Context, ruta string, segundo float64) (image.Image, error) {
@@ -1260,7 +1275,10 @@ func (s *Servicio) extraerMiniaturaVideo(ctx context.Context, ruta string, segun
 func (s *Servicio) instantePreviewVideo(ctx context.Context, ruta string) (float64, error) {
 	duracion, err := s.duracionVideo(ctx, ruta)
 	if err != nil {
-		return 0, err
+		// Algunos contenedores, como ciertos WebM generados por terceros,
+		// no publican duración usable. En ese caso seguimos adelante con un
+		// punto temprano fijo para no perder la miniatura del explorador.
+		return 0.8, nil
 	}
 
 	if duracion <= 0 {
@@ -1290,6 +1308,99 @@ func (s *Servicio) instantePreviewVideo(ctx context.Context, ruta string) (float
 	}
 
 	return instante, nil
+}
+
+func (s *Servicio) duracionVideoDesdePaquetes(ctx context.Context, ruta string, errPrevio error) (float64, error) {
+	if s.rutaFFprobe == "" {
+		if errPrevio != nil {
+			return 0, errPrevio
+		}
+		return 0, errors.New("ffprobe no esta disponible")
+	}
+
+	comando := exec.CommandContext(ctx, s.rutaFFprobe,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "packet=pts_time,duration_time",
+		"-of", "csv=p=0",
+		ruta,
+	)
+
+	salida, err := comando.StdoutPipe()
+	if err != nil {
+		if errPrevio != nil {
+			return 0, errPrevio
+		}
+		return 0, fmt.Errorf("no se pudo preparar el respaldo de duración por paquetes: %w", err)
+	}
+
+	var salidaError bytes.Buffer
+	comando.Stderr = &salidaError
+	if err := comando.Start(); err != nil {
+		if errPrevio != nil {
+			return 0, errPrevio
+		}
+		return 0, fmt.Errorf("no se pudo iniciar el respaldo de duración por paquetes: %w", err)
+	}
+
+	ultimoPTS := -1.0
+	ultimaDuracion := 0.0
+	lector := bufio.NewScanner(salida)
+	lector.Buffer(make([]byte, 0, 1024), 1024*1024)
+	for lector.Scan() {
+		linea := strings.TrimSpace(lector.Text())
+		if linea == "" {
+			continue
+		}
+
+		partes := strings.Split(linea, ",")
+		if len(partes) == 0 {
+			continue
+		}
+
+		pts, err := strconv.ParseFloat(strings.TrimSpace(partes[0]), 64)
+		if err != nil {
+			continue
+		}
+		ultimoPTS = pts
+		ultimaDuracion = 0
+		if len(partes) > 1 {
+			if duracion, err := strconv.ParseFloat(strings.TrimSpace(partes[1]), 64); err == nil && duracion > 0 {
+				ultimaDuracion = duracion
+			}
+		}
+	}
+
+	if err := lector.Err(); err != nil {
+		_ = comando.Wait()
+		if errPrevio != nil {
+			return 0, errPrevio
+		}
+		return 0, fmt.Errorf("no se pudo leer el respaldo de duración por paquetes: %w", err)
+	}
+
+	if err := comando.Wait(); err != nil {
+		textoError := strings.TrimSpace(salidaError.String())
+		if textoError != "" {
+			err = fmt.Errorf("%w: %s", err, textoError)
+		}
+		if errPrevio != nil {
+			return 0, errPrevio
+		}
+		return 0, fmt.Errorf("no se pudo completar el respaldo de duración por paquetes: %w", err)
+	}
+
+	if ultimoPTS >= 0 {
+		duracion := ultimoPTS + ultimaDuracion
+		if duracion > 0 {
+			return duracion, nil
+		}
+	}
+
+	if errPrevio != nil {
+		return 0, errPrevio
+	}
+	return 0, errors.New("no se pudo estimar la duración del video por paquetes")
 }
 
 func leerDimensionesImagen(ruta string) (int, int, error) {
