@@ -127,7 +127,7 @@ func TipoDesdeRuta(ruta string, esDirectorio bool) TipoArchivo {
 		".orf", ".pef", ".iiq", ".3fr", ".fff", ".rwl", ".mef", ".mos", ".mrw", ".x3f", ".erf", ".kdc",
 		".dcr", ".bay", ".cap", ".eip":
 		return TipoImagen
-	case ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".mts", ".m2ts", ".3gp":
+	case ".mp4", ".mov", ".qt", ".m4v", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".mts", ".m2ts", ".3gp":
 		return TipoVideo
 	case ".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg", ".opus", ".aiff":
 		return TipoAudio

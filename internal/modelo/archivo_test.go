@@ -28,6 +28,14 @@ func TestTipoDesdeRutaReconoceWebMComoVideo(t *testing.T) {
 	}
 }
 
+func TestTipoDesdeRutaReconoceQTComoVideo(t *testing.T) {
+	t.Parallel()
+
+	if tipo := TipoDesdeRuta("/tmp/clip-prueba.qt", false); tipo != TipoVideo {
+		t.Fatalf("la ruta .qt debería clasificarse como video, se obtuvo %q", tipo)
+	}
+}
+
 func TestArchivoAdmitePreviewParaFormatosEspeciales(t *testing.T) {
 	t.Parallel()
 
