@@ -139,6 +139,26 @@ func TipoDesdeRuta(ruta string, esDirectorio bool) TipoArchivo {
 	}
 }
 
+// AdmitePreview informa si el archivo puede mostrar miniatura en la UI.
+func (a Archivo) AdmitePreview() bool {
+	if a.EsDirectorio {
+		return false
+	}
+	switch a.Tipo {
+	case TipoImagen, TipoVideo:
+		return true
+	}
+	if a.Origen == OrigenYandex && strings.TrimSpace(a.PreviewURL) != "" {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(a.Ruta)) {
+	case ".pdf", ".psd", ".psb":
+		return true
+	default:
+		return false
+	}
+}
+
 // NombreVisible devuelve un nombre listo para UI.
 func (a Archivo) NombreVisible() string {
 	if a.Nombre != "" {

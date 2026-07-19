@@ -730,6 +730,38 @@ func (a *Aplicacion) dibujarListaConBarra(gtx layout.Context, lista *widget.List
 	return estilo.Layout(gtx, cantidad, elemento)
 }
 
+func (a *Aplicacion) debeMostrarPieCargaElementos() bool {
+	return a.cargandoElementos && len(a.elementos) > 0
+}
+
+func (a *Aplicacion) mensajePieCargaElementos() string {
+	if a.origenListado == origenListadoCarpetaYandex {
+		return "Solicitando más elementos remotos..."
+	}
+	return "Cargando más elementos..."
+}
+
+func (a *Aplicacion) dibujarPieCargaElementos(gtx layout.Context) layout.Dimensions {
+	return dibujarPanelConBorde(gtx, a.paleta.Panel, a.paleta.Borde, unit.Dp(12), unit.Dp(1), func(gtx layout.Context) layout.Dimensions {
+		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lado := gtx.Dp(unit.Dp(18))
+					gtx.Constraints.Min = image.Pt(lado, lado)
+					gtx.Constraints.Max = image.Pt(lado, lado)
+					cargador := material.Loader(a.tema)
+					cargador.Color = a.paleta.Acento
+					return cargador.Layout(gtx)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoSecundario(gtx, a.mensajePieCargaElementos())
+				}),
+			)
+		})
+	})
+}
+
 func (a *Aplicacion) dibujarArbolDirectorios(gtx layout.Context) layout.Dimensions {
 	return a.dibujarArbolDesdeRaiz(gtx, a.aplanarArbol())
 }
@@ -1135,7 +1167,15 @@ func (a *Aplicacion) dibujarListaElementos(gtx layout.Context) layout.Dimensions
 		return a.dibujarListaElementosAgrupados(gtx)
 	}
 
-	return a.dibujarListaConBarra(gtx, &a.listaCentro, len(elementos), func(gtx layout.Context, indice int) layout.Dimensions {
+	cantidad := len(elementos)
+	if a.debeMostrarPieCargaElementos() {
+		cantidad++
+	}
+
+	return a.dibujarListaConBarra(gtx, &a.listaCentro, cantidad, func(gtx layout.Context, indice int) layout.Dimensions {
+		if indice >= len(elementos) {
+			return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, a.dibujarPieCargaElementos)
+		}
 		if indice >= len(elementos)-2 {
 			a.cargarMasElementos()
 		}
@@ -1161,8 +1201,15 @@ func (a *Aplicacion) dibujarGaleria(gtx layout.Context) layout.Dimensions {
 	}
 
 	filas := int(math.Ceil(float64(len(elementos)) / float64(columnas)))
+	cantidad := filas
+	if a.debeMostrarPieCargaElementos() {
+		cantidad++
+	}
 
-	return a.dibujarListaConBarra(gtx, &a.listaCentro, filas, func(gtx layout.Context, fila int) layout.Dimensions {
+	return a.dibujarListaConBarra(gtx, &a.listaCentro, cantidad, func(gtx layout.Context, fila int) layout.Dimensions {
+		if fila >= filas {
+			return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, a.dibujarPieCargaElementos)
+		}
 		if fila >= filas-1 {
 			a.cargarMasElementos()
 		}
@@ -1177,7 +1224,14 @@ func (a *Aplicacion) dibujarGaleria(gtx layout.Context) layout.Dimensions {
 
 func (a *Aplicacion) dibujarListaElementosAgrupados(gtx layout.Context) layout.Dimensions {
 	entradas := a.construirEntradasListaAgrupada()
-	return a.dibujarListaConBarra(gtx, &a.listaCentro, len(entradas), func(gtx layout.Context, indice int) layout.Dimensions {
+	cantidad := len(entradas)
+	if a.debeMostrarPieCargaElementos() {
+		cantidad++
+	}
+	return a.dibujarListaConBarra(gtx, &a.listaCentro, cantidad, func(gtx layout.Context, indice int) layout.Dimensions {
+		if indice >= len(entradas) {
+			return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, a.dibujarPieCargaElementos)
+		}
 		if indice >= len(entradas)-2 {
 			a.cargarMasElementos()
 		}
@@ -1194,7 +1248,14 @@ func (a *Aplicacion) dibujarListaElementosAgrupados(gtx layout.Context) layout.D
 
 func (a *Aplicacion) dibujarGaleriaAgrupada(gtx layout.Context, columnas, anchoTarjeta, separacion int) layout.Dimensions {
 	filas := a.construirFilasGaleriaAgrupada(columnas)
-	return a.dibujarListaConBarra(gtx, &a.listaCentro, len(filas), func(gtx layout.Context, indice int) layout.Dimensions {
+	cantidad := len(filas)
+	if a.debeMostrarPieCargaElementos() {
+		cantidad++
+	}
+	return a.dibujarListaConBarra(gtx, &a.listaCentro, cantidad, func(gtx layout.Context, indice int) layout.Dimensions {
+		if indice >= len(filas) {
+			return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, a.dibujarPieCargaElementos)
+		}
 		if indice >= len(filas)-2 {
 			a.cargarMasElementos()
 		}
@@ -1389,15 +1450,14 @@ func (a *Aplicacion) dibujarMiniaturaElemento(gtx layout.Context, archivo modelo
 	if archivo.Tipo == modelo.TipoDirectorio {
 		return a.dibujarPreviewCarpeta(gtx, false)
 	}
-	if archivo.Tipo == modelo.TipoDesconocido {
-		return a.dibujarPreviewInterrogacion(gtx)
-	}
-
-	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+	if archivo.AdmitePreview() {
 		a.solicitarPreview(archivo, 360)
 		if imagenPreview, existe := a.obtenerImagenPreview(archivo.Ruta); existe {
 			return a.dibujarImagenConRegiones(gtx, archivo, imagenPreview, false)
 		}
+	}
+	if archivo.Tipo == modelo.TipoDesconocido {
+		return a.dibujarPreviewInterrogacion(gtx)
 	}
 
 	return dibujarPanel(gtx, a.paleta.AcentoSuave, unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
@@ -1465,14 +1525,14 @@ func (a *Aplicacion) dibujarPreviewComun(gtx layout.Context, archivo modelo.Arch
 	if archivo.Tipo == modelo.TipoDirectorio {
 		return a.dibujarPreviewCarpeta(gtx, false)
 	}
-	if archivo.Tipo == modelo.TipoDesconocido {
-		return a.dibujarPreviewInterrogacion(gtx)
-	}
-	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
+	if archivo.AdmitePreview() {
 		a.solicitarPreview(archivo, maximoPreview)
 		if imagenPreview, existe := a.obtenerImagenPreview(archivo.Ruta); existe {
 			return a.dibujarImagenConRegiones(gtx, archivo, imagenPreview, interactiva)
 		}
+	}
+	if archivo.Tipo == modelo.TipoDesconocido {
+		return a.dibujarPreviewInterrogacion(gtx)
 	}
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {

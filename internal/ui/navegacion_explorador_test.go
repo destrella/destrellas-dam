@@ -139,6 +139,40 @@ func TestAjustarPosicionFilaExploradorVisibleBordeInferior(t *testing.T) {
 	}
 }
 
+func TestPieCargaElementosSoloSeMuestraConContenidoPrevio(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		cargandoElementos: true,
+		elementos: []modelo.Archivo{
+			{Ruta: "/tmp/uno.jpg"},
+		},
+	}
+
+	if !app.debeMostrarPieCargaElementos() {
+		t.Fatal("debería mostrarse el pie de carga cuando ya hay elementos visibles y se está cargando otra página")
+	}
+
+	app.elementos = nil
+	if app.debeMostrarPieCargaElementos() {
+		t.Fatal("no debería mostrarse el pie de carga cuando aún no hay elementos visibles")
+	}
+}
+
+func TestMensajePieCargaElementosDistingueOrigenRemoto(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{}
+	if mensaje := app.mensajePieCargaElementos(); mensaje != "Cargando más elementos..." {
+		t.Fatalf("mensaje local inesperado: %q", mensaje)
+	}
+
+	app.origenListado = origenListadoCarpetaYandex
+	if mensaje := app.mensajePieCargaElementos(); mensaje != "Solicitando más elementos remotos..." {
+		t.Fatalf("mensaje remoto inesperado: %q", mensaje)
+	}
+}
+
 func TestAjustarPosicionFilaExploradorVisibleSinCambios(t *testing.T) {
 	t.Parallel()
 

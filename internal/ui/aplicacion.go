@@ -1141,6 +1141,9 @@ func (a *Aplicacion) cargarMasElementos() {
 		return
 	}
 	a.cargandoElementos = true
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
 
 	sesionActual := a.sesionListado
 	versionActual := a.versionListado
