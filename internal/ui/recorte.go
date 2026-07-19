@@ -118,16 +118,16 @@ func (a *Aplicacion) aplicarSugerenciaRecorte(archivo modelo.Archivo) bool {
 }
 
 func (a *Aplicacion) sugerenciaRecorte(archivo modelo.Archivo) (modelo.RegionEtiquetada, bool) {
-	preview, existe := a.previews[archivo.Ruta]
-	if !existe || preview == nil || preview.Imagen == nil {
+	imagenPreview, existe := a.obtenerImagenPreview(archivo.Ruta)
+	if !existe || imagenPreview == nil {
 		return modelo.RegionEtiquetada{}, false
 	}
 
-	rectangulo, ok := serviciometadatos.SugerirRecorteMate(preview.Imagen)
+	rectangulo, ok := serviciometadatos.SugerirRecorteMate(imagenPreview)
 	if !ok {
 		return modelo.RegionEtiquetada{}, false
 	}
-	return regionNormalizadaDesdeRectangulo(rectangulo, preview.Imagen.Bounds().Size())
+	return regionNormalizadaDesdeRectangulo(rectangulo, imagenPreview.Bounds().Size())
 }
 
 func (a *Aplicacion) permiteInteraccionRecorteEnVisor(archivo modelo.Archivo) bool {

@@ -209,6 +209,50 @@ func TestPrepararEstadoTrasAccionArchivoVuelveAExploradorDesdeVisor(t *testing.T
 	}
 }
 
+func TestDescartarArchivoActivoLimpiaDetalleSinCambiarLaVista(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		vistaActual:        vistaElementoUnico,
+		tieneArchivoActivo: true,
+		archivoActivo:      modelo.Archivo{Ruta: "/tmp/archivo.jpg"},
+		edicionRegiones: estadoEdicionRegiones{
+			Ruta:         "/tmp/archivo.jpg",
+			RegionesBase: []modelo.RegionEtiquetada{{Nombre: "Rostro", X: 0.1, Y: 0.1, Ancho: 0.2, Alto: 0.2}},
+		},
+		edicionRecorte: estadoEdicionRecorte{
+			Ruta:           "/tmp/archivo.jpg",
+			TieneSeleccion: true,
+			Seleccion:      modelo.RegionEtiquetada{X: 0.2, Y: 0.2, Ancho: 0.5, Alto: 0.5},
+		},
+		reproductorVideo: estadoReproductorVideo{
+			Ruta:          "/tmp/video.mov",
+			Reproduciendo: true,
+		},
+	}
+
+	app.descartarArchivoActivo()
+
+	if app.vistaActual != vistaElementoUnico {
+		t.Fatalf("la vista actual no debería cambiar, se obtuvo %q", app.vistaActual)
+	}
+	if app.tieneArchivoActivo {
+		t.Fatal("no debería quedar archivo activo tras limpiar el detalle")
+	}
+	if app.archivoActivo.Ruta != "" {
+		t.Fatalf("el archivo activo debería reiniciarse, se obtuvo %q", app.archivoActivo.Ruta)
+	}
+	if app.edicionRegiones.Ruta != "" {
+		t.Fatal("la edición de regiones debería limpiarse")
+	}
+	if app.edicionRecorte.Ruta != "" {
+		t.Fatal("la edición de recorte debería limpiarse")
+	}
+	if app.reproductorVideo.Ruta != "" || app.reproductorVideo.Reproduciendo {
+		t.Fatal("el reproductor de video debería reiniciarse")
+	}
+}
+
 func TestCalcularObjetivoRestauracionListadoRespetaScrollYPagina(t *testing.T) {
 	t.Parallel()
 

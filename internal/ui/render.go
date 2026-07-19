@@ -1395,8 +1395,8 @@ func (a *Aplicacion) dibujarMiniaturaElemento(gtx layout.Context, archivo modelo
 
 	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
 		a.solicitarPreview(archivo, 360)
-		if preview, existe := a.previews[archivo.Ruta]; existe && preview != nil && preview.Imagen != nil {
-			return a.dibujarImagenConRegiones(gtx, archivo, preview.Imagen, false)
+		if imagenPreview, existe := a.obtenerImagenPreview(archivo.Ruta); existe {
+			return a.dibujarImagenConRegiones(gtx, archivo, imagenPreview, false)
 		}
 	}
 
@@ -1470,8 +1470,8 @@ func (a *Aplicacion) dibujarPreviewComun(gtx layout.Context, archivo modelo.Arch
 	}
 	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
 		a.solicitarPreview(archivo, maximoPreview)
-		if preview, existe := a.previews[archivo.Ruta]; existe && preview != nil && preview.Imagen != nil {
-			return a.dibujarImagenConRegiones(gtx, archivo, preview.Imagen, interactiva)
+		if imagenPreview, existe := a.obtenerImagenPreview(archivo.Ruta); existe {
+			return a.dibujarImagenConRegiones(gtx, archivo, imagenPreview, interactiva)
 		}
 	}
 	return dibujarPanel(gtx, a.paleta.PanelElevado, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {

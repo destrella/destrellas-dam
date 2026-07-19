@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +20,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"golang.org/x/image/draw"
 
 	"destrellas-dam/internal/almacen"
 	"destrellas-dam/internal/configuracion"
@@ -61,6 +61,11 @@ const (
 	origenListadoUbicacion          tipoOrigenListado = "ubicacion"
 	origenListadoUbicacionSinNombre tipoOrigenListado = "ubicacion_sin_nombre"
 	etiquetaUbicacionSinNombre                        = "Ubicación sin nombre"
+)
+
+const (
+	limiteMemoriaPreviewsDefecto  = 384 << 20
+	limiteCantidadPreviewsDefecto = 768
 )
 
 type opcionFiltroLateral struct {
@@ -125,6 +130,14 @@ func (a *Aplicacion) cambiarVista(vista tipoVista) {
 	a.vistaActual = vista
 }
 
+func (a *Aplicacion) descartarArchivoActivo() {
+	a.archivoActivo = modelo.Archivo{}
+	a.tieneArchivoActivo = false
+	a.descartarEdicionRegiones()
+	a.descartarEdicionRecorte()
+	a.limpiarReproductorVideo()
+}
+
 type estadoSelectorDirectorio struct {
 	Expandido bool
 	Alternar  widget.Clickable
@@ -136,6 +149,8 @@ type estadoPreview struct {
 	Maximo      int
 	Orientacion int
 	Rotacion    int
+	TamanoBytes int64
+	UltimoUso   uint64
 }
 
 type tipoSeleccionLote string
@@ -227,7 +242,11 @@ type Aplicacion struct {
 	busquedaEtiquetas         estadoBusquedaLateral
 	busquedaUbicaciones       estadoBusquedaLateral
 
-	previews map[string]*estadoPreview
+	previews              map[string]*estadoPreview
+	memoriaPreviews       int64
+	contadorUsoPreviews   uint64
+	limiteMemoriaPreviews int64
+	limiteCantidadPreview int
 
 	metadatosPendientes  map[string]bool
 	metadatosVerificados map[string]int64
@@ -466,6 +485,8 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 		hayMasElementos:             true,
 		seleccionLote:               make(map[string]bool),
 		previews:                    make(map[string]*estadoPreview),
+		limiteMemoriaPreviews:       limiteMemoriaPreviewsDefecto,
+		limiteCantidadPreview:       limiteCantidadPreviewsDefecto,
 		metadatosPendientes:         make(map[string]bool),
 		metadatosVerificados:        make(map[string]int64),
 		tipoCoincidenciaActual:      modelo.CoincidenciaExacta,
@@ -903,12 +924,16 @@ func (a *Aplicacion) seleccionarCarpeta(ruta string) {
 	if ruta == "" {
 		return
 	}
+	cambioCarpeta := a.origenListado != origenListadoCarpeta || !strings.EqualFold(strings.TrimSpace(a.claveListadoActual), strings.TrimSpace(ruta))
 	if err := a.sincronizarArbolConRuta(ruta); err != nil {
 		a.establecerEstado("No se pudo sincronizar el árbol con la carpeta seleccionada", err)
 	}
 	a.carpetaSeleccionada = ruta
 	a.origenListado = origenListadoCarpeta
 	a.claveListadoActual = ruta
+	if cambioCarpeta {
+		a.descartarArchivoActivo()
+	}
 	a.reiniciarListado()
 }
 
@@ -917,6 +942,7 @@ func (a *Aplicacion) seleccionarCarpetaYandex(ruta string) {
 	if ruta == "" {
 		return
 	}
+	cambioCarpeta := a.origenListado != origenListadoCarpetaYandex || !strings.EqualFold(strings.TrimSpace(a.claveListadoActual), strings.TrimSpace(ruta))
 	a.asegurarArbolYandex()
 	if err := a.sincronizarArbolYandexConRuta(ruta); err != nil {
 		a.establecerEstado("No se pudo sincronizar el árbol remoto de Yandex.Disk", err)
@@ -924,6 +950,9 @@ func (a *Aplicacion) seleccionarCarpetaYandex(ruta string) {
 	a.carpetaYandexSeleccionada = ruta
 	a.origenListado = origenListadoCarpetaYandex
 	a.claveListadoActual = ruta
+	if cambioCarpeta {
+		a.descartarArchivoActivo()
+	}
 	a.reiniciarListado()
 }
 
@@ -1984,10 +2013,6 @@ func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 		a.establecerRutaDestinoActivoLocal(filepath.Dir(archivo.Ruta))
 		a.sincronizarReproductorVideo(archivo)
 		a.solicitarEnriquecimientoExplorador(archivo)
-
-		if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
-			a.solicitarPreview(archivo, 2_048)
-		}
 		return
 	}
 	a.descartarEdicionRegiones()
@@ -1995,9 +2020,6 @@ func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 	a.limpiarReproductorVideo()
 	a.establecerRutaDestinoActivoLocal(a.rutaUsuario)
 	a.establecerRutaDestinoActivoRemoto(rutaPadreYandex(archivo.Ruta))
-	if archivo.Tipo == modelo.TipoImagen || archivo.Tipo == modelo.TipoVideo {
-		a.solicitarPreview(archivo, 2_048)
-	}
 }
 
 func (a *Aplicacion) archivoNecesitaEnriquecimiento(archivo modelo.Archivo) bool {
@@ -2164,6 +2186,147 @@ func (a *Aplicacion) reemplazarArchivoEnMemoria(archivo modelo.Archivo) {
 	}
 }
 
+func (a *Aplicacion) asegurarMapaPreviews() {
+	if a.previews == nil {
+		a.previews = make(map[string]*estadoPreview)
+	}
+}
+
+func (a *Aplicacion) limiteMemoriaPreviewsActual() int64 {
+	if a.limiteMemoriaPreviews > 0 {
+		return a.limiteMemoriaPreviews
+	}
+	return limiteMemoriaPreviewsDefecto
+}
+
+func (a *Aplicacion) limiteCantidadPreviewsActual() int {
+	if a.limiteCantidadPreview > 0 {
+		return a.limiteCantidadPreview
+	}
+	return limiteCantidadPreviewsDefecto
+}
+
+func (a *Aplicacion) marcarUsoPreview(preview *estadoPreview) {
+	if preview == nil {
+		return
+	}
+	a.contadorUsoPreviews++
+	preview.UltimoUso = a.contadorUsoPreviews
+}
+
+func (a *Aplicacion) eliminarPreview(ruta string) {
+	if ruta == "" || a.previews == nil {
+		return
+	}
+	preview, existe := a.previews[ruta]
+	if !existe {
+		return
+	}
+	if preview != nil {
+		a.memoriaPreviews -= preview.TamanoBytes
+		if a.memoriaPreviews < 0 {
+			a.memoriaPreviews = 0
+		}
+	}
+	delete(a.previews, ruta)
+}
+
+func (a *Aplicacion) guardarPreview(ruta string, preview *estadoPreview) {
+	if ruta == "" {
+		return
+	}
+	a.asegurarMapaPreviews()
+	a.eliminarPreview(ruta)
+	if preview == nil {
+		return
+	}
+	preview.TamanoBytes = estimarMemoriaImagen(preview.Imagen)
+	a.marcarUsoPreview(preview)
+	a.previews[ruta] = preview
+	a.memoriaPreviews += preview.TamanoBytes
+	a.podarCachePreviews()
+}
+
+func (a *Aplicacion) previewProtegida(ruta string) bool {
+	if ruta == "" {
+		return false
+	}
+	if a.tieneArchivoActivo && a.archivoActivo.Ruta == ruta {
+		return true
+	}
+	if a.reproductorVideo.Ruta == ruta {
+		return true
+	}
+	return a.rutaPreviewDuplicados == ruta
+}
+
+func (a *Aplicacion) podarCachePreviews() {
+	if len(a.previews) == 0 {
+		return
+	}
+	limiteMemoria := a.limiteMemoriaPreviewsActual()
+	limiteCantidad := a.limiteCantidadPreviewsActual()
+	if (limiteMemoria <= 0 || a.memoriaPreviews <= limiteMemoria) &&
+		(limiteCantidad <= 0 || len(a.previews) <= limiteCantidad) {
+		return
+	}
+
+	type candidatoPreview struct {
+		Ruta      string
+		UltimoUso uint64
+	}
+
+	candidatos := make([]candidatoPreview, 0, len(a.previews))
+	for ruta, preview := range a.previews {
+		if a.previewProtegida(ruta) {
+			continue
+		}
+		uso := uint64(0)
+		if preview != nil {
+			uso = preview.UltimoUso
+		}
+		candidatos = append(candidatos, candidatoPreview{
+			Ruta:      ruta,
+			UltimoUso: uso,
+		})
+	}
+
+	sort.Slice(candidatos, func(i, j int) bool {
+		if candidatos[i].UltimoUso == candidatos[j].UltimoUso {
+			return candidatos[i].Ruta < candidatos[j].Ruta
+		}
+		return candidatos[i].UltimoUso < candidatos[j].UltimoUso
+	})
+
+	for _, candidato := range candidatos {
+		if (limiteMemoria <= 0 || a.memoriaPreviews <= limiteMemoria) &&
+			(limiteCantidad <= 0 || len(a.previews) <= limiteCantidad) {
+			break
+		}
+		a.eliminarPreview(candidato.Ruta)
+	}
+}
+
+func (a *Aplicacion) obtenerPreview(ruta string) (*estadoPreview, bool) {
+	if ruta == "" || a.previews == nil {
+		return nil, false
+	}
+	preview, existe := a.previews[ruta]
+	if !existe || preview == nil {
+		return nil, false
+	}
+	a.marcarUsoPreview(preview)
+	return preview, true
+}
+
+func (a *Aplicacion) obtenerImagenPreview(ruta string) (image.Image, bool) {
+	preview, existe := a.obtenerPreview(ruta)
+	if !existe || preview.Imagen == nil {
+		return nil, false
+	}
+	return preview.Imagen, true
+}
+
 func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) {
 	if archivo.Ruta == "" {
 		return
@@ -2172,9 +2335,10 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 		a.solicitarEnriquecimientoExplorador(archivo)
 	}
 
+	a.asegurarMapaPreviews()
 	orientacionObjetivo := orientacionPreviewArchivo(archivo)
 	rotacionObjetivo := rotacionPreviewArchivo(archivo)
-	preview, existe := a.previews[archivo.Ruta]
+	preview, existe := a.obtenerPreview(archivo.Ruta)
 	if existe && preview != nil {
 		if preview.Cargando {
 			return
@@ -2196,38 +2360,38 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 	if maximoActual > tamanoMaximo {
 		return
 	}
-	a.previews[archivo.Ruta] = &estadoPreview{
+	a.guardarPreview(archivo.Ruta, &estadoPreview{
 		Imagen:      imagenActual,
 		Cargando:    true,
 		Maximo:      maximo(maximoActual, tamanoMaximo),
 		Orientacion: orientacionObjetivo,
 		Rotacion:    rotacionObjetivo,
-	}
+	})
 
 	go func() {
 		imagen, err := a.decodificarPreview(archivo, tamanoMaximo)
 		a.encolarActualizacion(func() {
 			if err != nil {
 				if imagenActual != nil {
-					a.previews[archivo.Ruta] = &estadoPreview{
+					a.guardarPreview(archivo.Ruta, &estadoPreview{
 						Imagen:      imagenActual,
 						Cargando:    false,
 						Maximo:      maximoActual,
 						Orientacion: orientacionObjetivo,
 						Rotacion:    rotacionObjetivo,
-					}
+					})
 					return
 				}
-				delete(a.previews, archivo.Ruta)
+				a.eliminarPreview(archivo.Ruta)
 				return
 			}
-			a.previews[archivo.Ruta] = &estadoPreview{
-				Imagen:      imagen,
+			a.guardarPreview(archivo.Ruta, &estadoPreview{
+				Imagen:      compactarPreviewParaCache(imagen, tamanoMaximo),
 				Cargando:    false,
 				Maximo:      tamanoMaximo,
 				Orientacion: orientacionObjetivo,
 				Rotacion:    rotacionObjetivo,
-			}
+			})
 		})
 	}()
 }
@@ -2487,10 +2651,7 @@ func (a *Aplicacion) prepararEstadoTrasAccionArchivo() {
 	if a.vistaActual == vistaElementoUnico {
 		a.cambiarVista(vistaPrincipal)
 	}
-	a.tieneArchivoActivo = false
-	a.descartarEdicionRegiones()
-	a.descartarEdicionRecorte()
-	a.limpiarReproductorVideo()
+	a.descartarArchivoActivo()
 }
 
 // La ancla de selección sólo vive mientras exista un único elemento seleccionado.
@@ -2910,8 +3071,8 @@ func (a *Aplicacion) recortarImagenActiva() {
 				a.establecerEstado("No se pudo recortar la imagen", err)
 				return
 			}
-			delete(a.previews, archivo.Ruta)
-			delete(a.previews, rutaFinal)
+			a.eliminarPreview(archivo.Ruta)
+			a.eliminarPreview(rutaFinal)
 			delete(a.metadatosPendientes, archivo.Ruta)
 			delete(a.metadatosPendientes, rutaFinal)
 			delete(a.metadatosVerificados, archivo.Ruta)
@@ -3154,11 +3315,7 @@ func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (ima
 		}
 		defer lector.Close()
 
-		contenido, err := io.ReadAll(lector)
-		if err != nil {
-			return nil, fmt.Errorf("no se pudo leer la vista previa remota: %w", err)
-		}
-		imagenPreview, _, err := image.Decode(bytes.NewReader(contenido))
+		imagenPreview, _, err := image.Decode(lector)
 		if err != nil {
 			return nil, fmt.Errorf("no se pudo decodificar la vista previa remota: %w", err)
 		}
@@ -3181,6 +3338,68 @@ func (a *Aplicacion) decodificarPreview(archivo modelo.Archivo, maximo int) (ima
 			return nil, errors.New("servicio de metadatos no inicializado")
 		}
 		return a.servicioMetadatos.GenerarPreviewImagen(context.Background(), archivo.Ruta, maximo, archivo.Metadatos.Orientacion)
+	}
+}
+
+func compactarPreviewParaCache(imagen image.Image, maximo int) image.Image {
+	if imagen == nil {
+		return nil
+	}
+	if maximo < 64 {
+		maximo = 256
+	}
+
+	tamanoOriginal := imagen.Bounds().Size()
+	if tamanoOriginal.X <= 0 || tamanoOriginal.Y <= 0 {
+		return imagen
+	}
+	if tamanoOriginal.X <= maximo && tamanoOriginal.Y <= maximo {
+		return imagen
+	}
+
+	escala := float64(maximo) / float64(tamanoOriginal.X)
+	if tamanoOriginal.Y > tamanoOriginal.X {
+		escala = float64(maximo) / float64(tamanoOriginal.Y)
+	}
+	anchoDestino := maximoEntero(1, int(float64(tamanoOriginal.X)*escala))
+	altoDestino := maximoEntero(1, int(float64(tamanoOriginal.Y)*escala))
+	destino := image.NewNRGBA(image.Rect(0, 0, anchoDestino, altoDestino))
+	draw.ApproxBiLinear.Scale(destino, destino.Bounds(), imagen, imagen.Bounds(), draw.Over, nil)
+	return destino
+}
+
+func estimarMemoriaImagen(imagen image.Image) int64 {
+	switch actual := imagen.(type) {
+	case nil:
+		return 0
+	case *image.RGBA:
+		return int64(len(actual.Pix))
+	case *image.NRGBA:
+		return int64(len(actual.Pix))
+	case *image.RGBA64:
+		return int64(len(actual.Pix))
+	case *image.NRGBA64:
+		return int64(len(actual.Pix))
+	case *image.Alpha:
+		return int64(len(actual.Pix))
+	case *image.Alpha16:
+		return int64(len(actual.Pix))
+	case *image.Gray:
+		return int64(len(actual.Pix))
+	case *image.Gray16:
+		return int64(len(actual.Pix))
+	case *image.CMYK:
+		return int64(len(actual.Pix))
+	case *image.Paletted:
+		return int64(len(actual.Pix)) + int64(len(actual.Palette))*4
+	case *image.YCbCr:
+		return int64(len(actual.Y) + len(actual.Cb) + len(actual.Cr))
+	default:
+		tamano := actual.Bounds().Size()
+		if tamano.X <= 0 || tamano.Y <= 0 {
+			return 0
+		}
+		return int64(tamano.X * tamano.Y * 4)
 	}
 }
 
@@ -3296,11 +3515,11 @@ func tieneEtiquetaAdulta(etiquetas []string) bool {
 }
 
 func (a *Aplicacion) previewOp(ruta string) (paint.ImageOp, bool) {
-	preview, existe := a.previews[ruta]
-	if !existe || preview == nil || preview.Imagen == nil {
+	imagenPreview, existe := a.obtenerImagenPreview(ruta)
+	if !existe || imagenPreview == nil {
 		return paint.ImageOp{}, false
 	}
-	return paint.NewImageOp(preview.Imagen), true
+	return paint.NewImageOp(imagenPreview), true
 }
 
 func compararTextoUI(izquierda, derecha string) bool {
