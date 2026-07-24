@@ -284,6 +284,9 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 			} else {
 				a.establecerEstado("Metadatos guardados correctamente", nil)
 			}
+			if errExif == nil && errBD == nil {
+				a.marcarArchivoVerificadoConSistema(archivo)
+			}
 			a.archivoActivo = archivo
 			a.sincronizarEdicionRegiones(archivo)
 			a.sincronizarEdicionRecorte(archivo)

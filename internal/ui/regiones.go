@@ -4,8 +4,10 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"log"
 	"math"
 	"strings"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/gesture"
@@ -34,6 +36,10 @@ type estadoEdicionRegiones struct {
 	RegionPendiente     *modelo.RegionEtiquetada
 	EditorNombre        widget.Editor
 	SolicitarFocoNombre bool
+	InicioEsperaNombre  time.Time
+	ColaUIAlSoltar      int
+	NombreVisibleLog    bool
+	NombreConFocoLog    bool
 }
 
 func nuevoEstadoEdicionRegiones(ruta string, regiones []modelo.RegionEtiquetada) estadoEdicionRegiones {
@@ -174,6 +180,7 @@ func (a *Aplicacion) limpiarRegionesEdicion() {
 	a.edicionRegiones.Arrastrando = false
 	a.edicionRegiones.Etiquetando = false
 	a.edicionRegiones.EditorNombre.SetText("")
+	a.limpiarInstrumentacionNombreRegion()
 }
 
 func (a *Aplicacion) procesarEventosNombreRegion(gtx layout.Context) {
@@ -210,6 +217,7 @@ func (a *Aplicacion) confirmarRegionPendiente() {
 	a.edicionRegiones.RegionPendiente = nil
 	a.edicionRegiones.EditorNombre.SetText("")
 	a.edicionRegiones.SolicitarFocoNombre = false
+	a.limpiarInstrumentacionNombreRegion()
 	a.establecerEstado("Región agregada a la edición actual. Pulsa Guardar para escribirla en el archivo", nil)
 }
 
@@ -243,6 +251,9 @@ func (a *Aplicacion) guardarRegionesArchivoActivo() {
 				a.establecerEstado("Las regiones se guardaron en la imagen, pero no se pudo actualizar el catálogo", errBD)
 			} else {
 				a.establecerEstado("Regiones guardadas correctamente", nil)
+			}
+			if errBD == nil {
+				a.marcarArchivoVerificadoConSistema(archivo)
 			}
 			a.archivoActivo = archivo
 			a.reemplazarArchivoEnMemoria(archivo)
@@ -326,7 +337,71 @@ func (a *Aplicacion) registrarRegionPendienteDesdeArrastre(archivo modelo.Archiv
 	a.edicionRegiones.RegionPendiente = &regionArchivo
 	a.edicionRegiones.EditorNombre.SetText("")
 	a.edicionRegiones.SolicitarFocoNombre = true
+	a.iniciarInstrumentacionNombreRegion()
 	a.establecerEstado("Asigna un nombre a la nueva región y pulsa Enter para añadirla a la edición", nil)
+	if a.ventana != nil {
+		a.ventana.Invalidate()
+	}
+}
+
+func (a *Aplicacion) iniciarInstrumentacionNombreRegion() {
+	a.edicionRegiones.InicioEsperaNombre = time.Now()
+	a.edicionRegiones.ColaUIAlSoltar = len(a.actualizaciones)
+	a.edicionRegiones.NombreVisibleLog = false
+	a.edicionRegiones.NombreConFocoLog = false
+}
+
+func (a *Aplicacion) limpiarInstrumentacionNombreRegion() {
+	a.edicionRegiones.InicioEsperaNombre = time.Time{}
+	a.edicionRegiones.ColaUIAlSoltar = 0
+	a.edicionRegiones.NombreVisibleLog = false
+	a.edicionRegiones.NombreConFocoLog = false
+}
+
+func (a *Aplicacion) duracionInstrumentadaNombreRegion() time.Duration {
+	if a.edicionRegiones.InicioEsperaNombre.IsZero() {
+		return 0
+	}
+	duracion := time.Since(a.edicionRegiones.InicioEsperaNombre)
+	if duracion < 0 {
+		return 0
+	}
+	return duracion
+}
+
+func (a *Aplicacion) registrarInstrumentacionNombreVisible() {
+	if a.edicionRegiones.RegionPendiente == nil ||
+		a.edicionRegiones.NombreVisibleLog ||
+		a.edicionRegiones.InicioEsperaNombre.IsZero() {
+		return
+	}
+
+	a.edicionRegiones.NombreVisibleLog = true
+	log.Printf(
+		"Regiones: editor de nombre visible tras %s | archivo=%q | cola_ui_al_soltar=%d | cola_ui_actual=%d",
+		a.duracionInstrumentadaNombreRegion().Round(time.Millisecond),
+		a.edicionRegiones.Ruta,
+		a.edicionRegiones.ColaUIAlSoltar,
+		len(a.actualizaciones),
+	)
+}
+
+func (a *Aplicacion) registrarInstrumentacionNombreConFoco(gtx layout.Context) {
+	if a.edicionRegiones.RegionPendiente == nil ||
+		a.edicionRegiones.NombreConFocoLog ||
+		a.edicionRegiones.InicioEsperaNombre.IsZero() ||
+		!gtx.Focused(&a.edicionRegiones.EditorNombre) {
+		return
+	}
+
+	a.edicionRegiones.NombreConFocoLog = true
+	log.Printf(
+		"Regiones: editor de nombre con foco tras %s | archivo=%q | cola_ui_al_soltar=%d | cola_ui_actual=%d",
+		a.duracionInstrumentadaNombreRegion().Round(time.Millisecond),
+		a.edicionRegiones.Ruta,
+		a.edicionRegiones.ColaUIAlSoltar,
+		len(a.actualizaciones),
+	)
 }
 
 func limitarRegionNormalizada(valor float64) float64 {
@@ -356,10 +431,12 @@ func (a *Aplicacion) dibujarBloqueEtiquetarRegiones(gtx layout.Context) layout.D
 	}
 
 	a.procesarEventosNombreRegion(gtx)
+	a.registrarInstrumentacionNombreVisible()
 	if a.edicionRegiones.RegionPendiente != nil && a.edicionRegiones.SolicitarFocoNombre {
 		gtx.Execute(key.FocusCmd{Tag: &a.edicionRegiones.EditorNombre})
 		a.edicionRegiones.SolicitarFocoNombre = false
 	}
+	a.registrarInstrumentacionNombreConFoco(gtx)
 
 	regiones := a.regionesEnEdicion(a.archivoActivo)
 	mensaje := "Pulsa Etiquetar y arrastra sobre la imagen para crear regiones."

@@ -66,6 +66,7 @@ const (
 const (
 	limiteMemoriaPreviewsDefecto  = 384 << 20
 	limiteCantidadPreviewsDefecto = 768
+	maxActualizacionesPorFrame    = 48
 )
 
 type opcionFiltroLateral struct {
@@ -632,7 +633,10 @@ func (a *Aplicacion) Ejecutar(ventana *app.Window) error {
 }
 
 func (a *Aplicacion) drenarActualizaciones() {
-	for {
+	// Limitamos el trabajo por frame para que la UI siga respondiendo
+	// aunque varias tareas en segundo plano terminen al mismo tiempo.
+	limiteTiempo := time.Now().Add(8 * time.Millisecond)
+	for procesadas := 0; procesadas < maxActualizacionesPorFrame; procesadas++ {
 		select {
 		case actualizacion := <-a.actualizaciones:
 			if actualizacion != nil {
@@ -641,6 +645,12 @@ func (a *Aplicacion) drenarActualizaciones() {
 		default:
 			return
 		}
+		if time.Now().After(limiteTiempo) {
+			break
+		}
+	}
+	if len(a.actualizaciones) > 0 && a.ventana != nil {
+		a.ventana.Invalidate()
 	}
 }
 
@@ -2123,14 +2133,18 @@ func (a *Aplicacion) enriquecerArchivoActiva(archivo modelo.Archivo) {
 		return
 	}
 	go func() {
-		enriquecido, err := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		enriquecido, errAnalisis := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		var errGuardar error
+		if errAnalisis == nil {
+			errGuardar = a.almacen.GuardarArchivo(context.Background(), enriquecido)
+		}
 		a.encolarActualizacion(func() {
-			if err != nil {
-				a.establecerEstado("No se pudieron cargar todos los metadatos del archivo activo", err)
+			if errAnalisis != nil {
+				a.establecerEstado("No se pudieron cargar todos los metadatos del archivo activo", errAnalisis)
 				return
 			}
-			if err := a.almacen.GuardarArchivo(context.Background(), enriquecido); err != nil {
-				a.establecerEstado("No se pudo persistir el enriquecimiento del archivo activo", err)
+			if errGuardar != nil {
+				a.establecerEstado("No se pudo persistir el enriquecimiento del archivo activo", errGuardar)
 				return
 			}
 			a.reemplazarArchivoEnMemoria(enriquecido)
@@ -2154,15 +2168,19 @@ func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) 
 	a.metadatosPendientes[archivo.Ruta] = true
 
 	go func() {
-		enriquecido, err := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		enriquecido, errAnalisis := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		var errGuardar error
+		if errAnalisis == nil {
+			errGuardar = a.almacen.GuardarArchivo(context.Background(), enriquecido)
+		}
 		a.encolarActualizacion(func() {
 			delete(a.metadatosPendientes, archivo.Ruta)
-			if err != nil {
-				a.establecerEstado("No se pudieron precargar todos los metadatos del explorador", err)
+			if errAnalisis != nil {
+				a.establecerEstado("No se pudieron precargar todos los metadatos del explorador", errAnalisis)
 				return
 			}
-			if err := a.almacen.GuardarArchivo(context.Background(), enriquecido); err != nil {
-				a.establecerEstado("No se pudo persistir el enriquecimiento precargado del explorador", err)
+			if errGuardar != nil {
+				a.establecerEstado("No se pudo persistir el enriquecimiento precargado del explorador", errGuardar)
 				return
 			}
 			a.marcarArchivoVerificadoConSistema(enriquecido)
