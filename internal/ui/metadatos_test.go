@@ -39,6 +39,24 @@ func TestNormalizarFechaHoraEditadaRechazaZonaInvalida(t *testing.T) {
 	}
 }
 
+func TestInferirFechaHoraDesdeNombreReconoceMilisegundosYZonaUTC(t *testing.T) {
+	t.Parallel()
+
+	fecha, hora, zona, ok := inferirFechaHoraDesdeNombre("2026-06-10T08-36-06.000Z ejemplo.webp")
+	if !ok {
+		t.Fatal("se esperaba inferir fecha, hora y zona desde el nombre")
+	}
+	if fecha != "2026-06-10" {
+		t.Fatalf("fecha inesperada: %q", fecha)
+	}
+	if hora != "08:36:06" {
+		t.Fatalf("hora inesperada: %q", hora)
+	}
+	if zona != "+00:00" {
+		t.Fatalf("zona inesperada: %q", zona)
+	}
+}
+
 func TestArchivoTieneFechaYHoraArchivables(t *testing.T) {
 	t.Parallel()
 
@@ -138,6 +156,31 @@ func TestSincronizarEditoresMetadatosNoMarcaSugerenciasSiElArchivoYaTieneValores
 	}
 	if app.formularioMetadatos.ModeloSugeridoActivo {
 		t.Fatal("model no debería marcarse como sugerido si ya existe en el archivo")
+	}
+}
+
+func TestSincronizarEditoresMetadatosSugiereZonaDesdeNombreConMilisegundosYZ(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{}
+	archivo := modelo.Archivo{
+		Nombre: "2026-06-10T08-36-06.000Z ejemplo.webp",
+		Metadatos: modelo.MetadatosArchivo{
+			Fecha: "2026-06-10",
+			Hora:  "08:36:06",
+		},
+	}
+
+	app.sincronizarEditoresMetadatos(archivo)
+
+	if texto := app.editorZonaHoraria.Text(); texto != "+00:00" {
+		t.Fatalf("zona horaria inesperada en el editor: %q", texto)
+	}
+	if !app.formularioMetadatos.ZonaHorariaSugeridaActiva {
+		t.Fatal("la zona horaria debería marcarse como sugerida")
+	}
+	if app.formularioMetadatos.ZonaHorariaSugerida != "+00:00" {
+		t.Fatalf("zona horaria sugerida inesperada: %q", app.formularioMetadatos.ZonaHorariaSugerida)
 	}
 }
 
