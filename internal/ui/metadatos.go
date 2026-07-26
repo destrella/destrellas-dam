@@ -554,6 +554,7 @@ func inferirRedSocial(whereFroms []string) string {
 		"dribbble.com":   "Dribbble",
 		"medium.com":     "Medium",
 		"patreon.com":    "Patreon",
+		"fansly.com":     "Fansly",
 		"hidden.com":     "Hidden",
 	}
 	for _, valor := range whereFroms {
