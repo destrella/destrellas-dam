@@ -24,6 +24,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
+	oto "github.com/ebitengine/oto/v3"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
@@ -34,12 +35,16 @@ import (
 
 // Servicio encapsula herramientas externas y analisis ligeros en Go.
 type Servicio struct {
-	rutaExiftool string
-	rutaFFmpeg   string
-	rutaFFprobe  string
-	rutaMagick   string
-	rutaQLManage string
-	formatosLote sync.Map
+	rutaExiftool      string
+	rutaFFmpeg        string
+	rutaFFprobe       string
+	rutaMagick        string
+	rutaQLManage      string
+	formatosLote      sync.Map
+	audioContextOnce  sync.Once
+	audioContext      *oto.Context
+	audioContextListo chan struct{}
+	audioContextErr   error
 }
 
 // FotogramaVideo representa un cuadro decodificado y su instante aproximado.
@@ -101,6 +106,15 @@ func (s *Servicio) AnalizarArchivo(ctx context.Context, archivo modelo.Archivo) 
 			archivo.Duracion = time.Duration(duracion * float64(time.Second))
 		} else if primerError == nil && err != nil {
 			primerError = err
+		}
+	}
+
+	if archivo.Tipo == modelo.TipoVideo {
+		if fps, err := s.fotogramasPorSegundoVideo(ctx, archivo.Ruta); err == nil && fps > 0 {
+			archivo.FotogramasPorSegundo = fps
+		}
+		if tieneAudio, err := s.tienePistaAudioVideo(ctx, archivo.Ruta); err == nil {
+			archivo.TieneAudio = tieneAudio
 		}
 	}
 
@@ -770,7 +784,7 @@ func (s *Servicio) GenerarFotogramaVideo(ctx context.Context, ruta string, insta
 }
 
 // GenerarLoteFotogramasVideo extrae varios fotogramas consecutivos respetando Rotation.
-func (s *Servicio) GenerarLoteFotogramasVideo(ctx context.Context, ruta string, inicio time.Duration, fotogramasPorSegundo, cantidad, maximo int, rotacion int) ([]FotogramaVideo, error) {
+func (s *Servicio) GenerarLoteFotogramasVideo(ctx context.Context, ruta string, inicio time.Duration, fotogramasPorSegundo float64, cantidad, maximo int, rotacion int) ([]FotogramaVideo, error) {
 	if s.rutaFFmpeg == "" || s.rutaFFprobe == "" {
 		return nil, errors.New("ffmpeg/ffprobe no estan disponibles")
 	}
@@ -827,14 +841,21 @@ func construirFiltroVideoEscalado(maximo, rotacion int) string {
 	return strings.Join(partes, ",")
 }
 
-func construirFiltroLoteVideo(maximo, fotogramasPorSegundo, rotacion int) string {
+func construirFiltroLoteVideo(maximo int, fotogramasPorSegundo float64, rotacion int) string {
 	partes := make([]string, 0, 3)
 	if filtroRotacion := filtroRotacionVideo(rotacion); filtroRotacion != "" {
 		partes = append(partes, filtroRotacion)
 	}
-	partes = append(partes, fmt.Sprintf("fps=%d", fotogramasPorSegundo))
+	partes = append(partes, fmt.Sprintf("fps=%s", formatearTasaFotogramasFiltro(fotogramasPorSegundo)))
 	partes = append(partes, fmt.Sprintf("scale='if(gte(iw,ih),min(%d,iw),-2)':'if(lt(iw,ih),min(%d,ih),-2)'", maximo, maximo))
 	return strings.Join(partes, ",")
+}
+
+func formatearTasaFotogramasFiltro(fotogramasPorSegundo float64) string {
+	if fotogramasPorSegundo < 1 {
+		fotogramasPorSegundo = 12
+	}
+	return strconv.FormatFloat(fotogramasPorSegundo, 'f', -1, 64)
 }
 
 func filtroRotacionVideo(rotacion int) string {
@@ -850,7 +871,7 @@ func filtroRotacionVideo(rotacion int) string {
 	}
 }
 
-func (s *Servicio) extraerYLeerLoteFotogramas(ctx context.Context, ruta string, inicio time.Duration, filtro string, cantidad, fotogramasPorSegundo int, directorioBase, formato string) ([]FotogramaVideo, error) {
+func (s *Servicio) extraerYLeerLoteFotogramas(ctx context.Context, ruta string, inicio time.Duration, filtro string, cantidad int, fotogramasPorSegundo float64, directorioBase, formato string) ([]FotogramaVideo, error) {
 	usarPNG := formato == "png"
 	extension := "jpg"
 	if usarPNG {
@@ -917,7 +938,7 @@ func (s *Servicio) extraerLoteFotogramasConPatron(ctx context.Context, ruta stri
 	return nil
 }
 
-func (s *Servicio) leerFotogramasTemporales(directorio string, inicio time.Duration, fotogramasPorSegundo int) ([]FotogramaVideo, error) {
+func (s *Servicio) leerFotogramasTemporales(directorio string, inicio time.Duration, fotogramasPorSegundo float64) ([]FotogramaVideo, error) {
 	entradas, err := os.ReadDir(directorio)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudieron leer los fotogramas temporales: %w", err)
@@ -926,7 +947,10 @@ func (s *Servicio) leerFotogramasTemporales(directorio string, inicio time.Durat
 		return entradas[i].Name() < entradas[j].Name()
 	})
 
-	intervalo := time.Second / time.Duration(fotogramasPorSegundo)
+	if fotogramasPorSegundo < 1 {
+		fotogramasPorSegundo = 12
+	}
+	intervalo := time.Duration(float64(time.Second) / fotogramasPorSegundo)
 	fotogramas := make([]FotogramaVideo, 0, len(entradas))
 	for indice, entrada := range entradas {
 		if entrada.IsDir() {
@@ -1132,7 +1156,7 @@ func (s *Servicio) fotogramasPorSegundoVideo(ctx context.Context, ruta string) (
 	comando := exec.CommandContext(ctx, s.rutaFFprobe,
 		"-v", "error",
 		"-select_streams", "v:0",
-		"-show_entries", "stream=avg_frame_rate",
+		"-show_entries", "stream=avg_frame_rate,r_frame_rate",
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		ruta,
 	)
@@ -1141,14 +1165,13 @@ func (s *Servicio) fotogramasPorSegundoVideo(ctx context.Context, ruta string) (
 		return 0, fmt.Errorf("no se pudo obtener la tasa de fotogramas del video: %w", err)
 	}
 
-	fotogramasPorSegundo, err := parsearTasaFotogramas(strings.TrimSpace(string(salida)))
-	if err != nil {
-		return 0, err
+	for _, linea := range strings.Split(strings.TrimSpace(string(salida)), "\n") {
+		fotogramasPorSegundo, err := parsearTasaFotogramas(linea)
+		if err == nil && fotogramasPorSegundo > 0 {
+			return fotogramasPorSegundo, nil
+		}
 	}
-	if fotogramasPorSegundo <= 0 {
-		return 0, errors.New("la tasa de fotogramas del video no es válida")
-	}
-	return fotogramasPorSegundo, nil
+	return 0, errors.New("la tasa de fotogramas del video no es válida")
 }
 
 func parsearTasaFotogramas(texto string) (float64, error) {
@@ -1181,6 +1204,134 @@ func parsearTasaFotogramas(texto string) (float64, error) {
 		return 0, fmt.Errorf("tasa de fotogramas inválida: %w", err)
 	}
 	return valor, nil
+}
+
+func (s *Servicio) tienePistaAudioVideo(ctx context.Context, ruta string) (bool, error) {
+	if s.rutaFFprobe == "" {
+		return false, errors.New("ffprobe no esta disponible")
+	}
+
+	comando := exec.CommandContext(ctx, s.rutaFFprobe,
+		"-v", "error",
+		"-select_streams", "a:0",
+		"-show_entries", "stream=index",
+		"-of", "csv=p=0",
+		ruta,
+	)
+	salida, err := comando.Output()
+	if err != nil {
+		return false, fmt.Errorf("no se pudo comprobar la pista de audio del video: %w", err)
+	}
+	return strings.TrimSpace(string(salida)) != "", nil
+}
+
+func (s *Servicio) obtenerContextoAudio() (*oto.Context, error) {
+	s.audioContextOnce.Do(func() {
+		s.audioContext, s.audioContextListo, s.audioContextErr = oto.NewContext(&oto.NewContextOptions{
+			SampleRate:   48000,
+			ChannelCount: 2,
+			Format:       oto.FormatSignedInt16LE,
+			BufferSize:   40 * time.Millisecond,
+		})
+	})
+	if s.audioContextErr != nil {
+		return nil, s.audioContextErr
+	}
+	if s.audioContextListo != nil {
+		<-s.audioContextListo
+		s.audioContextListo = nil
+	}
+	return s.audioContext, nil
+}
+
+// ReproducirAudioVideo reproduce la pista de audio del video a partir de un instante.
+func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio time.Duration) error {
+	if s.rutaFFmpeg == "" {
+		return errors.New("ffmpeg no esta disponible")
+	}
+
+	tieneAudio, err := s.tienePistaAudioVideo(ctx, ruta)
+	if err != nil {
+		return err
+	}
+	if !tieneAudio {
+		return nil
+	}
+
+	contextoAudio, err := s.obtenerContextoAudio()
+	if err != nil {
+		return fmt.Errorf("no se pudo inicializar la salida de audio: %w", err)
+	}
+
+	comando := exec.CommandContext(ctx, s.rutaFFmpeg,
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-stream_loop", "-1",
+		"-ss", fmt.Sprintf("%.3f", inicio.Seconds()),
+		"-i", ruta,
+		"-map", "0:a:0?",
+		"-vn", "-sn", "-dn",
+		"-ac", "2",
+		"-ar", "48000",
+		"-acodec", "pcm_s16le",
+		"-f", "s16le",
+		"pipe:1",
+	)
+	salida, err := comando.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("no se pudo preparar la salida de audio: %w", err)
+	}
+
+	var salidaError bytes.Buffer
+	comando.Stderr = &salidaError
+	if err := comando.Start(); err != nil {
+		return fmt.Errorf("no se pudo iniciar la reproduccion de audio: %w", err)
+	}
+
+	lector, escritor := io.Pipe()
+	copiaTerminada := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(escritor, salida)
+		_ = escritor.CloseWithError(err)
+		copiaTerminada <- err
+	}()
+
+	player := contextoAudio.NewPlayer(lector)
+	player.Play()
+	// Cancelar ffmpeg no vacía el buffer interno de oto. Reset lo pausa y
+	// descarta inmediatamente los samples restantes al pausar o buscar.
+	defer player.Reset()
+	defer player.Close()
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := player.Err(); err != nil {
+			return err
+		}
+		if !player.IsPlaying() && player.BufferedSize() == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := <-copiaTerminada; err != nil {
+		textoSalida := strings.TrimSpace(salidaError.String())
+		if textoSalida != "" {
+			return fmt.Errorf("no se pudo reproducir el audio del video: %w: %s", err, textoSalida)
+		}
+		return fmt.Errorf("no se pudo reproducir el audio del video: %w", err)
+	}
+
+	if err := comando.Wait(); err != nil {
+		textoSalida := strings.TrimSpace(salidaError.String())
+		if textoSalida != "" {
+			return fmt.Errorf("no se pudo reproducir el audio del video: %w: %s", err, textoSalida)
+		}
+		return fmt.Errorf("no se pudo reproducir el audio del video: %w", err)
+	}
+
+	return nil
 }
 
 func numeroFotogramaAproximado(instante time.Duration, fotogramasPorSegundo float64) int {

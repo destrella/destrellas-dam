@@ -8,6 +8,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/io/key"
@@ -1500,10 +1501,20 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return a.dibujarContenedorNavegacionVisor(gtx, func(gtx layout.Context) layout.Dimensions {
-				if a.reproductorVideo.Fotograma != nil {
-					return a.dibujarImagenConRegiones(gtx, archivo, a.reproductorVideo.Fotograma, false)
-				}
-				return a.dibujarPreviewComun(gtx, archivo, maximoFotograma, false)
+				return layout.Stack{Alignment: layout.Center}.Layout(gtx,
+					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+						if a.reproductorVideo.Fotograma != nil {
+							return a.dibujarImagenConRegiones(gtx, archivo, a.reproductorVideo.Fotograma, false)
+						}
+						return a.dibujarPreviewComun(gtx, archivo, maximoFotograma, false)
+					}),
+					layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+						if !a.debeMostrarIndicadorCargaVideo() {
+							return layout.Dimensions{}
+						}
+						return a.dibujarOverlayCargaVideo(gtx)
+					}),
+				)
 			})
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
@@ -1519,6 +1530,65 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 			})
 		}),
 	)
+}
+
+func (a *Aplicacion) debeMostrarIndicadorCargaVideo() bool {
+	return a.reproductorVideo.Cargando && (!a.reproductorVideo.Reproduciendo || a.reproductorVideo.MostrarCarga)
+}
+
+func (a *Aplicacion) dibujarOverlayCargaVideo(gtx layout.Context) layout.Dimensions {
+	ancho := gtx.Constraints.Max.X
+	alto := gtx.Constraints.Max.Y
+	if ancho <= 0 || alto <= 0 {
+		return layout.Dimensions{Size: image.Pt(ancho, alto)}
+	}
+
+	fondo := color.NRGBA{R: 10, G: 13, B: 17, A: 122}
+	paint.FillShape(gtx.Ops, fondo, clip.Rect(image.Rect(0, 0, ancho, alto)).Op())
+	gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+	return a.dibujarSpinnerCargaVideo(gtx, image.Pt(ancho, alto))
+}
+
+func (a *Aplicacion) dibujarSpinnerCargaVideo(gtx layout.Context, area image.Point) layout.Dimensions {
+	tamano := maximo(40, gtx.Dp(unit.Dp(40)))
+	if tamano <= 0 {
+		tamano = 40
+	}
+	if area.X > 0 && area.Y > 0 {
+		tamano = minimo(tamano, minimo(area.X, area.Y))
+	}
+	if tamano < 16 {
+		return layout.Dimensions{Size: area}
+	}
+	puntos := 12
+	diametro := maximo(4, gtx.Dp(unit.Dp(4)))
+	if diametro >= tamano {
+		diametro = maximo(2, tamano/4)
+	}
+	radio := float64(tamano) * 0.30
+	fase := math.Mod(float64(gtx.Now.UnixNano())/float64(time.Second), 1.0)
+	destello := int(fase * float64(puntos))
+	origenX := area.X / 2
+	origenY := area.Y / 2
+
+	for i := 0; i < puntos; i++ {
+		distancia := (i - destello + puntos) % puntos
+		intensidad := 0.25 + 0.75*(1.0-float64(distancia)/float64(puntos))
+		if intensidad < 0.25 {
+			intensidad = 0.25
+		}
+		alpha := uint8(math.Round(255 * intensidad))
+		angulo := (2 * math.Pi * float64(i)) / float64(puntos)
+		x := int(math.Round(float64(tamano)/2 + radio*math.Cos(angulo)))
+		y := int(math.Round(float64(tamano)/2 + radio*math.Sin(angulo)))
+		pincel := color.NRGBA{R: a.paleta.Acento.R, G: a.paleta.Acento.G, B: a.paleta.Acento.B, A: alpha}
+
+		desplazamiento := op.Offset(image.Pt(origenX+x-tamano/2-diametro/2, origenY+y-tamano/2-diametro/2)).Push(gtx.Ops)
+		paint.FillShape(gtx.Ops, pincel, clip.Ellipse(image.Rect(0, 0, diametro, diametro)).Op(gtx.Ops))
+		desplazamiento.Pop()
+	}
+
+	return layout.Dimensions{Size: area}
 }
 
 func (a *Aplicacion) dibujarPreviewComun(gtx layout.Context, archivo modelo.Archivo, maximoPreview int, interactiva bool) layout.Dimensions {
@@ -1572,6 +1642,15 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 		fondoLoop = a.paleta.Exito
 		colorLoop = a.paleta.Texto
 	}
+	fondoAudio := a.paleta.PanelElevado
+	colorAudio := a.paleta.Texto
+	audioDisponible := a.audioVideoDisponible()
+	if !audioDisponible {
+		fondoAudio = a.paleta.Panel
+		colorAudio = a.paleta.TextoSuave
+	} else if a.reproducirAudioVideo {
+		fondoAudio = a.paleta.AcentoSuave
+	}
 
 	dim := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1593,6 +1672,14 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 						a.alternarLoopReproductorVideo()
 					}, a.dibujarIconoLoopVideo)
 				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarBotonAccionIcono(gtx, &a.botonAudioVideo, fondoAudio, colorAudio, func() {
+						if audioDisponible {
+							a.alternarAudioReproductorVideo()
+						}
+					}, a.dibujarIconoAudioVideo)
+				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return a.dibujarTextoSecundario(gtx, fmt.Sprintf("%s / %s", formatearDuracion(a.reproductorVideo.Posicion), formatearDuracion(a.reproductorVideo.Duracion)))
@@ -1613,6 +1700,14 @@ func (a *Aplicacion) dibujarControlesReproductorVideo(gtx layout.Context, archiv
 			}
 			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return a.dibujarTextoSecundario(gtx, "Video: "+a.reproductorVideo.Error)
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if strings.TrimSpace(a.reproductorVideo.AudioError) == "" {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Top: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return a.dibujarTextoSecundario(gtx, "Audio: "+a.reproductorVideo.AudioError)
 			})
 		}),
 	)
@@ -3588,6 +3683,42 @@ func (a *Aplicacion) dibujarIconoLoopVideo(gtx layout.Context, colorIcono, _ col
 		Path:  ruta.End(),
 		Width: 2,
 	}.Op())
+	return layout.Dimensions{Size: objetivo}
+}
+
+func (a *Aplicacion) dibujarIconoAudioVideo(gtx layout.Context, colorIcono, fondo color.NRGBA) layout.Dimensions {
+	base := image.Pt(24, 16)
+	gtx, restaurar, objetivo := prepararIconoEscalado(gtx, base)
+	defer restaurar()
+
+	// Altavoz principal.
+	var altavoz clip.Path
+	altavoz.Begin(gtx.Ops)
+	altavoz.MoveTo(f32.Pt(2, 6))
+	altavoz.LineTo(f32.Pt(7, 6))
+	altavoz.LineTo(f32.Pt(12, 2))
+	altavoz.LineTo(f32.Pt(12, 14))
+	altavoz.LineTo(f32.Pt(7, 10))
+	altavoz.LineTo(f32.Pt(2, 10))
+	altavoz.Close()
+	paint.FillShape(gtx.Ops, colorIcono, clip.Outline{Path: altavoz.End()}.Op())
+
+	if a.reproducirAudioVideo {
+		paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(14, 4, 20, 12)).Op(gtx.Ops))
+		paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(16, 6, 18, 10)).Op(gtx.Ops))
+		paint.FillShape(gtx.Ops, colorIcono, clip.Ellipse(image.Rect(18, 2, 24, 14)).Op(gtx.Ops))
+		paint.FillShape(gtx.Ops, fondo, clip.Ellipse(image.Rect(20, 4, 22, 12)).Op(gtx.Ops))
+		return layout.Dimensions{Size: objetivo}
+	}
+
+	// Si el audio está desactivado, dejamos una marca de silencio explícita.
+	var silencio clip.Path
+	silencio.Begin(gtx.Ops)
+	silencio.MoveTo(f32.Pt(14, 2))
+	silencio.LineTo(f32.Pt(22, 14))
+	silencio.MoveTo(f32.Pt(22, 2))
+	silencio.LineTo(f32.Pt(14, 14))
+	paint.FillShape(gtx.Ops, colorIcono, clip.Stroke{Path: silencio.End(), Width: 2}.Op())
 	return layout.Dimensions{Size: objetivo}
 }
 

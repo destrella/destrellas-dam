@@ -85,23 +85,25 @@ type MetadatosArchivo struct {
 
 // Archivo describe tanto archivos locales como remotos.
 type Archivo struct {
-	ID           int64
-	Origen       Origen
-	Ruta         string
-	RutaPadre    string
-	Nombre       string
-	PreviewURL   string
-	Tamano       int64
-	Modificado   time.Time
-	Tipo         TipoArchivo
-	EsOculto     bool
-	EsDirectorio bool
-	Ancho        int
-	Alto         int
-	Duracion     time.Duration
-	Indicadores  IndicadoresArchivo
-	Metadatos    MetadatosArchivo
-	Hashes       HashesArchivo
+	ID                   int64
+	Origen               Origen
+	Ruta                 string
+	RutaPadre            string
+	Nombre               string
+	PreviewURL           string
+	Tamano               int64
+	Modificado           time.Time
+	Tipo                 TipoArchivo
+	EsOculto             bool
+	EsDirectorio         bool
+	Ancho                int
+	Alto                 int
+	Duracion             time.Duration
+	FotogramasPorSegundo float64
+	TieneAudio           bool
+	Indicadores          IndicadoresArchivo
+	Metadatos            MetadatosArchivo
+	Hashes               HashesArchivo
 }
 
 // EsMultimedia informa si el archivo es imagen, video o audio.

@@ -70,6 +70,9 @@ func TestWebMSoportaPreviewYFotogramas(t *testing.T) {
 	if archivo.Duracion <= 0 {
 		t.Fatalf("el análisis del WebM debería completar una duración positiva, se obtuvo %v", archivo.Duracion)
 	}
+	if archivo.FotogramasPorSegundo < 11.5 || archivo.FotogramasPorSegundo > 12.5 {
+		t.Fatalf("el análisis del WebM debería detectar un fps cercano a 12, se obtuvo %v", archivo.FotogramasPorSegundo)
+	}
 }
 
 func crearVideoWebMPrueba(t *testing.T, rutaFFmpeg string) string {

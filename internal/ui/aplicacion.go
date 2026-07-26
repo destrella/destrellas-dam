@@ -450,10 +450,15 @@ type Aplicacion struct {
 	botonReiniciarVideo          widget.Clickable
 	botonReproducirVideo         widget.Clickable
 	botonLoopVideo               widget.Clickable
+	botonAudioVideo              widget.Clickable
 	botonAbrirCarpetaContenedora widget.Clickable
 	botonPreviewVisor            widget.Clickable
 	controlProgresoVideo         widget.Float
 	reproducirVideoEnLoop        bool
+	reproducirAudioVideo         bool
+	audioVideoCancel             context.CancelFunc
+	audioVideoVersion            int
+	audioVideoIniciado           bool
 }
 
 // NuevaAplicacion construye la interfaz y sincroniza sus widgets con la configuracion.
@@ -568,6 +573,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorRutaEscaneoMetadatos.SetText(appUI.rutaUsuario)
 	appUI.editorRutaEscaneoDuplicados.SingleLine = true
 	appUI.editorRutaEscaneoDuplicados.SetText(appUI.rutaUsuario)
+	appUI.reproducirAudioVideo = true
 
 	if appUI.servicioDuplicados != nil {
 		if estadoRemoto, err := appUI.servicioDuplicados.CargarEstadoDescubrimientoRemoto(); err == nil && estadoRemoto.Pendiente {
