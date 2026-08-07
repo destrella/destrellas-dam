@@ -1323,12 +1323,14 @@ func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Arch
 	seleccionadoAntes := a.seleccionLote[archivo.Ruta]
 	widgets.Seleccion.Value = seleccionadoAntes
 	clicks := 0
+	usarRango := false
 	for {
 		click, ok := widgets.Fila.Update(gtx)
 		if !ok {
 			break
 		}
 		clicks = click.NumClicks
+		usarRango = usarRango || click.Modifiers.Contain(key.ModShift)
 	}
 
 	fondo := a.paleta.PanelElevado
@@ -1363,7 +1365,7 @@ func (a *Aplicacion) dibujarFilaElemento(gtx layout.Context, archivo modelo.Arch
 			})
 		})
 	})
-	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value, usarRango)
 	if cambioSeleccion || clicks > 0 {
 		a.limpiarFocoEdicion(gtx)
 	}
@@ -1381,12 +1383,14 @@ func (a *Aplicacion) dibujarTarjetaElemento(gtx layout.Context, archivo modelo.A
 	seleccionadoAntes := a.seleccionLote[archivo.Ruta]
 	widgets.Seleccion.Value = seleccionadoAntes
 	clicks := 0
+	usarRango := false
 	for {
 		click, ok := widgets.Fila.Update(gtx)
 		if !ok {
 			break
 		}
 		clicks = click.NumClicks
+		usarRango = usarRango || click.Modifiers.Contain(key.ModShift)
 	}
 
 	fondo := a.paleta.PanelElevado
@@ -1425,7 +1429,7 @@ func (a *Aplicacion) dibujarTarjetaElemento(gtx layout.Context, archivo modelo.A
 			})
 		})
 	})
-	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value)
+	cambioSeleccion := a.actualizarSeleccionElemento(archivo.Ruta, seleccionadoAntes, widgets.Seleccion.Value, usarRango)
 	if cambioSeleccion || clicks > 0 {
 		a.limpiarFocoEdicion(gtx)
 	}

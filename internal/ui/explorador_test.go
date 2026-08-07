@@ -6,7 +6,7 @@ import (
 	"destrellas-dam/internal/modelo"
 )
 
-func TestSeleccionElementoConPosibleRangoSeleccionaIntervaloVisible(t *testing.T) {
+func TestSeleccionElementoConShiftSeleccionaIntervaloVisible(t *testing.T) {
 	t.Parallel()
 
 	app := &Aplicacion{
@@ -19,12 +19,12 @@ func TestSeleccionElementoConPosibleRangoSeleccionaIntervaloVisible(t *testing.T
 		seleccionLote: make(map[string]bool),
 	}
 
-	app.seleccionarElementoConPosibleRango("/tmp/a.jpg")
+	app.seleccionarElementoConPosibleRango("/tmp/a.jpg", false)
 	if app.anclaSeleccionLote != "/tmp/a.jpg" {
 		t.Fatalf("se esperaba que la ancla inicial fuera /tmp/a.jpg, se obtuvo %q", app.anclaSeleccionLote)
 	}
 
-	app.seleccionarElementoConPosibleRango("/tmp/d.jpg")
+	app.seleccionarElementoConPosibleRango("/tmp/d.jpg", true)
 
 	esperadas := []string{"/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg", "/tmp/d.jpg"}
 	if len(app.seleccionLote) != len(esperadas) {
@@ -40,7 +40,7 @@ func TestSeleccionElementoConPosibleRangoSeleccionaIntervaloVisible(t *testing.T
 	}
 }
 
-func TestSeleccionElementoConPosibleRangoMantieneSeleccionLibreTrasRango(t *testing.T) {
+func TestSeleccionElementoConShiftMantieneSeleccionLibreTrasRango(t *testing.T) {
 	t.Parallel()
 
 	app := &Aplicacion{
@@ -55,9 +55,9 @@ func TestSeleccionElementoConPosibleRangoMantieneSeleccionLibreTrasRango(t *test
 		seleccionLote: make(map[string]bool),
 	}
 
-	app.seleccionarElementoConPosibleRango("/tmp/b.jpg")
-	app.seleccionarElementoConPosibleRango("/tmp/d.jpg")
-	app.seleccionarElementoConPosibleRango("/tmp/f.jpg")
+	app.seleccionarElementoConPosibleRango("/tmp/b.jpg", false)
+	app.seleccionarElementoConPosibleRango("/tmp/d.jpg", true)
+	app.seleccionarElementoConPosibleRango("/tmp/f.jpg", false)
 
 	esperadas := []string{"/tmp/b.jpg", "/tmp/c.jpg", "/tmp/d.jpg", "/tmp/f.jpg"}
 	if len(app.seleccionLote) != len(esperadas) {
@@ -73,6 +73,33 @@ func TestSeleccionElementoConPosibleRangoMantieneSeleccionLibreTrasRango(t *test
 	}
 	if app.anclaSeleccionLote != "" {
 		t.Fatalf("no debería quedar ancla activa con varias selecciones independientes, se obtuvo %q", app.anclaSeleccionLote)
+	}
+}
+
+func TestSeleccionElementoSinShiftNoSeleccionaElIntervalo(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		elementos: []modelo.Archivo{
+			{Ruta: "/tmp/a.jpg"},
+			{Ruta: "/tmp/b.jpg"},
+			{Ruta: "/tmp/c.jpg"},
+			{Ruta: "/tmp/d.jpg"},
+		},
+		seleccionLote: make(map[string]bool),
+	}
+
+	app.seleccionarElementoConPosibleRango("/tmp/a.jpg", false)
+	app.seleccionarElementoConPosibleRango("/tmp/d.jpg", false)
+
+	if len(app.seleccionLote) != 2 {
+		t.Fatalf("se esperaban dos archivos seleccionados, se obtuvieron %d", len(app.seleccionLote))
+	}
+	if !app.seleccionLote["/tmp/a.jpg"] || !app.seleccionLote["/tmp/d.jpg"] {
+		t.Fatal("los extremos seleccionados deberían conservarse")
+	}
+	if app.seleccionLote["/tmp/b.jpg"] || app.seleccionLote["/tmp/c.jpg"] {
+		t.Fatal("los archivos intermedios no deberían seleccionarse sin Shift")
 	}
 }
 

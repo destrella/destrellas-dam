@@ -3033,7 +3033,7 @@ func (a *Aplicacion) seleccionarRangoEntreRutas(inicioRuta, finRuta string) bool
 	return true
 }
 
-func (a *Aplicacion) seleccionarElementoConPosibleRango(ruta string) {
+func (a *Aplicacion) seleccionarElementoConPosibleRango(ruta string, usarRango bool) {
 	ruta = strings.TrimSpace(ruta)
 	if ruta == "" {
 		return
@@ -3041,7 +3041,7 @@ func (a *Aplicacion) seleccionarElementoConPosibleRango(ruta string) {
 	if a.seleccionLote == nil {
 		a.seleccionLote = make(map[string]bool)
 	}
-	if a.anclaSeleccionLote != "" && a.anclaSeleccionLote != ruta {
+	if usarRango && a.anclaSeleccionLote != "" && a.anclaSeleccionLote != ruta {
 		if a.seleccionarRangoEntreRutas(a.anclaSeleccionLote, ruta) {
 			a.actualizarAnclaSeleccionLote()
 			return
@@ -3059,12 +3059,12 @@ func (a *Aplicacion) deseleccionarElemento(ruta string) {
 	a.actualizarAnclaSeleccionLote()
 }
 
-func (a *Aplicacion) actualizarSeleccionElemento(ruta string, estabaSeleccionado, ahoraSeleccionado bool) bool {
+func (a *Aplicacion) actualizarSeleccionElemento(ruta string, estabaSeleccionado, ahoraSeleccionado, usarRango bool) bool {
 	if estabaSeleccionado == ahoraSeleccionado {
 		return false
 	}
 	if ahoraSeleccionado {
-		a.seleccionarElementoConPosibleRango(ruta)
+		a.seleccionarElementoConPosibleRango(ruta, usarRango)
 	} else {
 		a.deseleccionarElemento(ruta)
 	}
