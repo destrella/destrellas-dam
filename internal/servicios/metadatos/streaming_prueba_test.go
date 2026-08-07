@@ -147,6 +147,22 @@ func TestResolverFuenteVideoOmiteCacheParaFuenteRemotaGrande(t *testing.T) {
 	}
 }
 
+func TestTienePistaAudioVideoDetectaPistaLocal(t *testing.T) {
+	servicio := NuevoServicio()
+	if servicio.rutaFFmpeg == "" || servicio.rutaFFprobe == "" {
+		t.Skip("ffmpeg/ffprobe no están disponibles")
+	}
+
+	rutaVideo := crearVideoMP4ConAudioPrueba(t, servicio.rutaFFmpeg)
+	tieneAudio, err := servicio.TienePistaAudioVideo(context.Background(), rutaVideo)
+	if err != nil {
+		t.Fatalf("no se pudo detectar el audio del video local: %v", err)
+	}
+	if !tieneAudio {
+		t.Fatal("el video local de prueba debería informar una pista de audio")
+	}
+}
+
 type servidorVideoRange struct {
 	*httptest.Server
 	mu               sync.Mutex

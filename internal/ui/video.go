@@ -48,6 +48,8 @@ type estadoReproductorVideo struct {
 	InstanteError         time.Duration
 	MaximoError           int
 	AudioError            string
+	AudioVerificado       bool
+	AudioCargando         bool
 	MetadatosCargando     bool
 	ReproduccionPendiente bool
 	InstantePendiente     time.Duration
@@ -102,10 +104,12 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 			Duracion:         archivo.Duracion,
 			Rotacion:         rotacion,
 			FotogramasPorSeg: fotogramasPorSeg,
+			AudioVerificado:  archivo.TieneAudio,
 		}
 		a.controlProgresoVideo = widget.Float{}
 		a.controlExtraccionFrame = widget.Float{}
 		a.formatoExtraccionExpandido = false
+		a.solicitarVerificacionAudioVideo(archivo)
 		return
 	}
 
@@ -158,7 +162,42 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 		a.reproductorVideo.TienePendiente = false
 		a.reproductorVideo.VersionSolicitud++
 	}
+	if archivo.TieneAudio {
+		a.reproductorVideo.AudioVerificado = true
+		a.reproductorVideo.AudioCargando = false
+	}
+	a.solicitarVerificacionAudioVideo(archivo)
 	a.sincronizarControlesPosicionVideo()
+}
+
+func (a *Aplicacion) solicitarVerificacionAudioVideo(archivo modelo.Archivo) {
+	if a.servicioMetadatos == nil || archivo.Tipo != modelo.TipoVideo || archivo.Ruta == "" || archivo.TieneAudio {
+		return
+	}
+	estado := &a.reproductorVideo
+	if estado.Ruta != archivo.Ruta || estado.AudioVerificado || estado.AudioCargando {
+		return
+	}
+
+	estado.AudioCargando = true
+	ruta := archivo.Ruta
+	go func() {
+		tieneAudio, err := a.servicioMetadatos.TienePistaAudioVideo(context.Background(), ruta)
+		a.encolarActualizacion(func() {
+			if a.reproductorVideo.Ruta != ruta {
+				return
+			}
+			a.reproductorVideo.AudioCargando = false
+			// Un fallo se reintentará al abrir nuevamente el archivo, sin lanzar
+			// ffprobe en cada frame del renderizado actual.
+			a.reproductorVideo.AudioVerificado = true
+			if err != nil || !tieneAudio || !a.tieneArchivoActivo || a.archivoActivo.Ruta != ruta {
+				return
+			}
+			a.archivoActivo.TieneAudio = true
+			a.reemplazarArchivoEnMemoria(a.archivoActivo)
+		})
+	}()
 }
 
 func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo modelo.Archivo, maximoFotograma int) {

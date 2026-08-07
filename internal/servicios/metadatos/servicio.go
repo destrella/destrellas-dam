@@ -1411,6 +1411,12 @@ func (s *Servicio) tienePistaAudioVideo(ctx context.Context, ruta string) (bool,
 	return s.tienePistaAudioVideoFuente(ctx, origen)
 }
 
+// TienePistaAudioVideo consulta únicamente la presencia de audio sin volver a
+// analizar el resto de metadatos del archivo.
+func (s *Servicio) TienePistaAudioVideo(ctx context.Context, ruta string) (bool, error) {
+	return s.tienePistaAudioVideo(ctx, ruta)
+}
+
 func (s *Servicio) tienePistaAudioVideoFuente(ctx context.Context, ruta string) (bool, error) {
 	if s.rutaFFprobe == "" {
 		return false, errors.New("ffprobe no esta disponible")
