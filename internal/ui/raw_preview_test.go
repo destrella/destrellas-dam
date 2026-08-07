@@ -29,11 +29,15 @@ func (c *clienteYandexPreviewPrueba) ListarElementos(context.Context, string, in
 	return nil, yandex.ErrNoImplementado
 }
 
-func (c *clienteYandexPreviewPrueba) Descargar(context.Context, string) (io.ReadCloser, error) {
+func (c *clienteYandexPreviewPrueba) ListarUltimosSubidos(context.Context, int, int) ([]yandex.ElementoRemoto, error) {
+	return nil, yandex.ErrNoImplementado
+}
+
 func (c *clienteYandexPreviewPrueba) URLDescarga(context.Context, string) (string, error) {
 	return "", yandex.ErrNoImplementado
 }
 
+func (c *clienteYandexPreviewPrueba) Descargar(context.Context, string) (io.ReadCloser, error) {
 	return nil, yandex.ErrNoImplementado
 }
 

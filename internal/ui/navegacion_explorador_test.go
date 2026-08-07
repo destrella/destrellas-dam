@@ -32,6 +32,27 @@ func TestIndiceDestinoNavegacionExploradorLista(t *testing.T) {
 	}
 }
 
+func TestArbolYandexMuestraUltimosSubidosAntesDeLaRaiz(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{}
+	app.reconstruirArbolYandex()
+
+	visibles := app.aplanarArbolYandex()
+	if len(visibles) < 2 {
+		t.Fatalf("se esperaban el acceso a últimos subidos y la raíz: %+v", visibles)
+	}
+	if !visibles[0].Nodo.EsListadoEspecial || visibles[0].Nodo.Nombre != nombreUltimosSubidosYandex {
+		t.Fatalf("el primer nodo no es el acceso a últimos subidos: %+v", visibles[0].Nodo)
+	}
+	if visibles[1].Nodo.Nombre != "Yandex.Disk" {
+		t.Fatalf("la raíz de Yandex.Disk debería quedar después del acceso especial: %+v", visibles[1].Nodo)
+	}
+	if len(app.aplanarArbolYandexSoloCarpetas()) != 1 {
+		t.Fatalf("los selectores de destino no deberían incluir el acceso especial")
+	}
+}
+
 func TestIndiceDestinoNavegacionExploradorGaleria(t *testing.T) {
 	t.Parallel()
 

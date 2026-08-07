@@ -2,6 +2,8 @@ package yandex
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -128,6 +130,96 @@ func TestClienteRESTListaDirectoriosFiltrandoArchivos(t *testing.T) {
 	}
 }
 
+func TestClienteRESTListaUltimosSubidos(t *testing.T) {
+	t.Parallel()
+
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resources/last-uploaded" {
+			t.Fatalf("ruta inesperada: %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "OAuth token-demo" {
+			t.Fatalf("cabecera de autorización inesperada: %q", r.Header.Get("Authorization"))
+		}
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Fatalf("límite inesperado: %q", got)
+		}
+		if got := r.URL.Query().Get("offset"); got != "" {
+			t.Fatalf("last-uploaded no debería recibir offset: %q", got)
+		}
+		if got := r.URL.Query().Get("preview_size"); got != "XXXL" {
+			t.Fatalf("tamaño de preview inesperado: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"items": [{
+					"name": "reciente.jpg",
+					"path": "disk:/Fotos/reciente.jpg",
+					"type": "file",
+					"size": 512,
+					"md5": "md5-reciente",
+					"sha256": "sha-reciente",
+					"modified": "2026-08-06T10:20:00+00:00"
+			}]
+		}`)
+	}))
+	defer servidor.Close()
+
+	cliente := &ClienteREST{
+		clave:   "token-demo",
+		baseURL: servidor.URL,
+		cliente: servidor.Client(),
+	}
+
+	elementos, err := cliente.ListarUltimosSubidos(context.Background(), 100, 0)
+	if err != nil {
+		t.Fatalf("ListarUltimosSubidos devolvió error: %v", err)
+	}
+	if len(elementos) != 1 || elementos[0].Nombre != "reciente.jpg" || elementos[0].Ruta != "disk:/Fotos/reciente.jpg" {
+		t.Fatalf("último archivo interpretado incorrectamente: %+v", elementos)
+	}
+}
+
+func TestClienteRESTListaUltimosSubidosRecortaElPrefijoParaPaginar(t *testing.T) {
+	t.Parallel()
+
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("limit"); got != "80" {
+			t.Fatalf("límite acumulado inesperado: %q", got)
+		}
+		if got := r.URL.Query().Get("offset"); got != "" {
+			t.Fatalf("last-uploaded no debería recibir offset: %q", got)
+		}
+
+		items := make([]map[string]any, 80)
+		for indice := range items {
+			items[indice] = map[string]any{
+				"name": fmt.Sprintf("item-%02d.jpg", indice),
+				"path": fmt.Sprintf("disk:/Fotos/item-%02d.jpg", indice),
+				"type": "file",
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"items": items, "limit": 80, "media_type": ""}); err != nil {
+			t.Fatalf("no se pudo escribir la respuesta: %v", err)
+		}
+	}))
+	defer servidor.Close()
+
+	cliente := &ClienteREST{
+		clave:   "token-demo",
+		baseURL: servidor.URL,
+		cliente: servidor.Client(),
+	}
+
+	elementos, err := cliente.ListarUltimosSubidos(context.Background(), 40, 40)
+	if err != nil {
+		t.Fatalf("ListarUltimosSubidos devolvió error: %v", err)
+	}
+	if len(elementos) != 40 || elementos[0].Nombre != "item-40.jpg" || elementos[39].Nombre != "item-79.jpg" {
+		t.Fatalf("página recortada incorrectamente: cantidad=%d primero=%+v último=%+v", len(elementos), elementos[0], elementos[len(elementos)-1])
+	}
+}
+
 func TestClienteRESTDescargaContenidoRemoto(t *testing.T) {
 	t.Parallel()
 
@@ -151,7 +243,6 @@ func TestClienteRESTDescargaContenidoRemoto(t *testing.T) {
 		cliente: servidor.Client(),
 	}
 
-	lector, err := cliente.Descargar(context.Background(), "disk:/demo.txt")
 	href, err := cliente.URLDescarga(context.Background(), "disk:/demo.txt")
 	if err != nil {
 		t.Fatalf("URLDescarga devolvió error: %v", err)
@@ -160,6 +251,7 @@ func TestClienteRESTDescargaContenidoRemoto(t *testing.T) {
 		t.Fatalf("URL temporal inesperada: %q", href)
 	}
 
+	lector, err := cliente.Descargar(context.Background(), "disk:/demo.txt")
 	if err != nil {
 		t.Fatalf("Descargar devolvió error: %v", err)
 	}

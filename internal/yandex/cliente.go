@@ -18,8 +18,9 @@ import (
 var ErrNoImplementado = errors.New("integracion de Yandex.Disk pendiente de completarse")
 
 const (
-	baseURLDefecto = "https://cloud-api.yandex.net/v1/disk"
-	rutaRaizYandex = "disk:/"
+	baseURLDefecto             = "https://cloud-api.yandex.net/v1/disk"
+	rutaRaizYandex             = "disk:/"
+	limiteMaximoUltimosSubidos = 1000
 )
 
 // ElementoRemoto representa el contrato minimo consumido por la UI.
@@ -40,8 +41,9 @@ type Cliente interface {
 	Configurado() bool
 	ListarDirectorios(ctx context.Context, ruta string, limite, desplazamiento int) ([]ElementoRemoto, error)
 	ListarElementos(ctx context.Context, ruta string, limite, desplazamiento int) ([]ElementoRemoto, error)
-	Descargar(ctx context.Context, ruta string) (io.ReadCloser, error)
+	ListarUltimosSubidos(ctx context.Context, limite, desplazamiento int) ([]ElementoRemoto, error)
 	URLDescarga(ctx context.Context, ruta string) (string, error)
+	Descargar(ctx context.Context, ruta string) (io.ReadCloser, error)
 	DescargarPreview(ctx context.Context, ruta, tamano string) (io.ReadCloser, error)
 	DescargarPreviewURL(ctx context.Context, href string) (io.ReadCloser, error)
 	Mover(ctx context.Context, origen, destino string) error
@@ -93,12 +95,17 @@ func (c *ClienteNulo) ListarElementos(_ context.Context, _ string, _ int, _ int)
 	return nil, ErrNoImplementado
 }
 
-// Descargar responde con un error explicito.
+// ListarUltimosSubidos responde con un error explicito.
+func (c *ClienteNulo) ListarUltimosSubidos(_ context.Context, _ int, _ int) ([]ElementoRemoto, error) {
+	return nil, ErrNoImplementado
+}
+
 // URLDescarga responde con un error explicito.
 func (c *ClienteNulo) URLDescarga(_ context.Context, _ string) (string, error) {
 	return "", ErrNoImplementado
 }
 
+// Descargar responde con un error explicito.
 func (c *ClienteNulo) Descargar(_ context.Context, _ string) (io.ReadCloser, error) {
 	return nil, ErrNoImplementado
 }
@@ -140,17 +147,47 @@ func (c *ClienteREST) ListarElementos(ctx context.Context, ruta string, limite, 
 	return c.listarRecursosFiltrados(ctx, ruta, limite, desplazamiento, nil)
 }
 
-// Descargar abre un flujo de lectura al contenido remoto solicitado.
-func (c *ClienteREST) Descargar(ctx context.Context, ruta string) (io.ReadCloser, error) {
-// URLDescarga obtiene la URL temporal que puede consumir ffmpeg directamente.
-// La URL no debe persistirse: Yandex puede hacerla expirar.
-func (c *ClienteREST) URLDescarga(ctx context.Context, ruta string) (string, error) {
+// ListarUltimosSubidos devuelve los recursos que Yandex.Disk reporta como
+// cargados más recientemente.
+func (c *ClienteREST) ListarUltimosSubidos(ctx context.Context, limite, desplazamiento int) ([]ElementoRemoto, error) {
 	if !c.Configurado() {
-		return "", ErrNoImplementado
+		return nil, ErrNoImplementado
 	}
-	return c.obtenerURLDescarga(ctx, ruta)
+	if limite < 1 {
+		limite = 40
+	}
+	if desplazamiento < 0 {
+		desplazamiento = 0
+	}
+	if desplazamiento >= limiteMaximoUltimosSubidos {
+		return nil, nil
+	}
+
+	limiteTotal := desplazamiento + limite
+	if limiteTotal > limiteMaximoUltimosSubidos {
+		limiteTotal = limiteMaximoUltimosSubidos
+	}
+
+	// last-uploaded sólo admite limit; el parámetro offset se ignora. Para
+	// obtener una página posterior solicitamos el prefijo completo y recortamos
+	// localmente la parte ya consumida.
+	pagina, err := c.listarPaginaUltimosSubidos(ctx, limiteTotal)
+	if err != nil {
+		return nil, err
+	}
+	if desplazamiento >= len(pagina) {
+		return nil, nil
+	}
+
+	hasta := desplazamiento + limite
+	if hasta > len(pagina) {
+		hasta = len(pagina)
+	}
+	return pagina[desplazamiento:hasta], nil
 }
 
+// Descargar abre un flujo de lectura al contenido remoto solicitado.
+func (c *ClienteREST) Descargar(ctx context.Context, ruta string) (io.ReadCloser, error) {
 	if !c.Configurado() {
 		return nil, ErrNoImplementado
 	}
@@ -160,6 +197,15 @@ func (c *ClienteREST) URLDescarga(ctx context.Context, ruta string) (string, err
 		return nil, err
 	}
 	return c.descargarDesdeURL(ctx, href, "no se pudo descargar el archivo remoto desde Yandex.Disk")
+}
+
+// URLDescarga obtiene la URL temporal que puede consumir ffmpeg directamente.
+// La URL no debe persistirse: Yandex puede hacerla expirar.
+func (c *ClienteREST) URLDescarga(ctx context.Context, ruta string) (string, error) {
+	if !c.Configurado() {
+		return "", ErrNoImplementado
+	}
+	return c.obtenerURLDescarga(ctx, ruta)
 }
 
 // DescargarPreview obtiene la miniatura remota en el tamaño solicitado.
@@ -373,6 +419,19 @@ func (c *ClienteREST) listarPaginaRecursos(ctx context.Context, ruta string, lim
 		limite,
 		offset,
 	)
+	return c.listarPaginaRecursosDesdeEndpoint(ctx, endpoint)
+}
+
+func (c *ClienteREST) listarPaginaUltimosSubidos(ctx context.Context, limite int) ([]ElementoRemoto, error) {
+	endpoint := fmt.Sprintf(
+		"%s/resources/last-uploaded?limit=%d&preview_size=XXXL&fields=_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.size,_embedded.items.md5,_embedded.items.sha256,_embedded.items.modified,_embedded.items.preview",
+		c.baseURL,
+		limite,
+	)
+	return c.listarPaginaUltimosSubidosDesdeEndpoint(ctx, endpoint)
+}
+
+func (c *ClienteREST) listarPaginaRecursosDesdeEndpoint(ctx context.Context, endpoint string) ([]ElementoRemoto, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo preparar la solicitud a Yandex.Disk: %w", err)
@@ -396,6 +455,35 @@ func (c *ClienteREST) listarPaginaRecursos(ctx context.Context, ruta string, lim
 
 	elementos := make([]ElementoRemoto, 0, len(payload.Embedded.Items))
 	for _, item := range payload.Embedded.Items {
+		elementos = append(elementos, convertirItemRecurso(item))
+	}
+	return elementos, nil
+}
+
+func (c *ClienteREST) listarPaginaUltimosSubidosDesdeEndpoint(ctx context.Context, endpoint string) ([]ElementoRemoto, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo preparar la solicitud a Yandex.Disk: %w", err)
+	}
+	req.Header.Set("Authorization", "OAuth "+strings.TrimSpace(c.clave))
+
+	resp, err := c.cliente.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo consultar Yandex.Disk: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, describirErrorRespuesta(resp)
+	}
+
+	var payload respuestaUltimosSubidosYandex
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("no se pudo interpretar la respuesta de últimos archivos de Yandex.Disk: %w", err)
+	}
+
+	elementos := make([]ElementoRemoto, 0, len(payload.Items))
+	for _, item := range payload.Items {
 		elementos = append(elementos, convertirItemRecurso(item))
 	}
 	return elementos, nil
@@ -434,6 +522,10 @@ type respuestaRecursosYandex struct {
 	} `json:"_embedded"`
 }
 
+type respuestaUltimosSubidosYandex struct {
+	Items []itemRecursoYandex `json:"items"`
+}
+
 type itemRecursoYandex struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
@@ -443,12 +535,16 @@ type itemRecursoYandex struct {
 	MD5      string `json:"md5"`
 	SHA256   string `json:"sha256"`
 	Modified string `json:"modified"`
+	Created  string `json:"created"`
 }
 
 func convertirItemRecurso(item itemRecursoYandex) ElementoRemoto {
 	esDirectorio := strings.EqualFold(strings.TrimSpace(item.Type), "dir")
 	ruta := normalizarRutaYandex(item.Path)
 	modificado, _ := time.Parse(time.RFC3339, strings.TrimSpace(item.Modified))
+	if modificado.IsZero() {
+		modificado, _ = time.Parse(time.RFC3339, strings.TrimSpace(item.Created))
+	}
 	return ElementoRemoto{
 		Ruta:         ruta,
 		Nombre:       strings.TrimSpace(item.Name),

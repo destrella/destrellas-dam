@@ -736,7 +736,7 @@ func (a *Aplicacion) debeMostrarPieCargaElementos() bool {
 }
 
 func (a *Aplicacion) mensajePieCargaElementos() string {
-	if a.origenListado == origenListadoCarpetaYandex {
+	if a.origenListado == origenListadoCarpetaYandex || a.origenListado == origenListadoUltimosYandex {
 		return "Solicitando más elementos remotos..."
 	}
 	return "Cargando más elementos..."
@@ -786,9 +786,13 @@ func (a *Aplicacion) dibujarArbolDesdeRaiz(gtx layout.Context, visibles []nodoVi
 				}),
 				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					activo := a.carpetaSeleccionada == nodo.Nodo.Ruta
-					if nodo.Nodo.Origen == modelo.OrigenYandex {
+					activo := false
+					if nodo.Nodo.EsListadoEspecial {
+						activo = a.origenListado == origenListadoUltimosYandex
+					} else if nodo.Nodo.Origen == modelo.OrigenYandex {
 						activo = a.carpetaYandexSeleccionada == nodo.Nodo.Ruta
+					} else {
+						activo = a.carpetaSeleccionada == nodo.Nodo.Ruta
 					}
 					return a.dibujarFilaArbol(gtx, &nodo.Nodo.Seleccionar, nodo.Nodo.Nombre, activo, func() {
 						a.seleccionarNodoArbol(nodo.Nodo)
@@ -806,7 +810,7 @@ func (a *Aplicacion) dibujarSelectorDirectorioLocal(gtx layout.Context, titulo, 
 
 func (a *Aplicacion) dibujarSelectorDirectorioYandex(gtx layout.Context, titulo, rutaSeleccionada string, estado *estadoSelectorDirectorio, lista *widget.List, mapa map[string]*widgetsSelectorDirectorio, alSeleccionar func(string)) layout.Dimensions {
 	a.asegurarArbolYandex()
-	return a.dibujarSelectorDirectorio(gtx, titulo, a.aplanarArbolYandex(), rutaSeleccionada, estado, lista, mapa, alSeleccionar)
+	return a.dibujarSelectorDirectorio(gtx, titulo, a.aplanarArbolYandexSoloCarpetas(), rutaSeleccionada, estado, lista, mapa, alSeleccionar)
 }
 
 func (a *Aplicacion) dibujarSelectorDirectorio(gtx layout.Context, titulo string, visibles []nodoVisible, rutaSeleccionada string, estado *estadoSelectorDirectorio, lista *widget.List, mapa map[string]*widgetsSelectorDirectorio, alSeleccionar func(string)) layout.Dimensions {
@@ -1532,14 +1536,17 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 	)
 }
 
-func (a *Aplicacion) debeMostrarIndicadorCargaVideo() bool {
 func visorUsaReproductorVideo(archivo modelo.Archivo) bool {
 	return archivo.Tipo == modelo.TipoVideo
 }
 
+func (a *Aplicacion) debeMostrarIndicadorCargaVideo() bool {
 	if a.reproductorVideo.Cargando && (!a.reproductorVideo.Reproduciendo || a.reproductorVideo.MostrarCarga) {
 		return true
 	}
+	// El video no avanza hasta que oto recibe los primeros samples. Mientras
+	// tanto conservamos el frame visible y mostramos que la reproducción sigue
+	// preparándose, en especial para fuentes remotas.
 	return a.reproductorVideo.Reproduciendo && a.reproducirAudioVideo && a.audioVideoIniciado && !a.audioVideoListo
 }
 

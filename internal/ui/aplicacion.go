@@ -57,6 +57,7 @@ type tipoOrigenListado string
 const (
 	origenListadoCarpeta            tipoOrigenListado = "carpeta"
 	origenListadoCarpetaYandex      tipoOrigenListado = "carpeta_yandex"
+	origenListadoUltimosYandex      tipoOrigenListado = "ultimos_yandex"
 	origenListadoEtiqueta           tipoOrigenListado = "etiqueta"
 	origenListadoUbicacion          tipoOrigenListado = "ubicacion"
 	origenListadoUbicacionSinNombre tipoOrigenListado = "ubicacion_sin_nombre"
@@ -67,6 +68,8 @@ const (
 	limiteMemoriaPreviewsDefecto  = 384 << 20
 	limiteCantidadPreviewsDefecto = 768
 	maxActualizacionesPorFrame    = 48
+	rutaUltimosSubidosYandex      = "yandex://last-uploaded"
+	nombreUltimosSubidosYandex    = "Últimos archivos agregados"
 )
 
 type opcionFiltroLateral struct {
@@ -88,15 +91,16 @@ type Dependencias struct {
 }
 
 type nodoArbolUI struct {
-	Origen      modelo.Origen
-	Ruta        string
-	Nombre      string
-	Expandido   bool
-	Cargado     bool
-	Cargando    bool
-	Hijos       []*nodoArbolUI
-	Seleccionar widget.Clickable
-	Alternar    widget.Clickable
+	Origen            modelo.Origen
+	Ruta              string
+	Nombre            string
+	EsListadoEspecial bool
+	Expandido         bool
+	Cargado           bool
+	Cargando          bool
+	Hijos             []*nodoArbolUI
+	Seleccionar       widget.Clickable
+	Alternar          widget.Clickable
 }
 
 type nodoVisible struct {
@@ -226,8 +230,9 @@ type Aplicacion struct {
 	archivoActivo      modelo.Archivo
 	tieneArchivoActivo bool
 
-	raizArbol       *nodoArbolUI
-	raizArbolYandex *nodoArbolUI
+	raizArbol         *nodoArbolUI
+	raizArbolYandex   *nodoArbolUI
+	nodoUltimosYandex *nodoArbolUI
 
 	carpetaYandexSeleccionada string
 
@@ -459,9 +464,9 @@ type Aplicacion struct {
 	audioVideoCancel             context.CancelFunc
 	audioVideoVersion            int
 	audioVideoIniciado           bool
-}
 	audioVideoListo              bool
 	audioVideoPausado            bool
+}
 
 // NuevaAplicacion construye la interfaz y sincroniza sus widgets con la configuracion.
 func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
@@ -761,6 +766,13 @@ func (a *Aplicacion) reconstruirArbol() {
 }
 
 func (a *Aplicacion) reconstruirArbolYandex() {
+	a.nodoUltimosYandex = &nodoArbolUI{
+		Origen:            modelo.OrigenYandex,
+		Ruta:              rutaUltimosSubidosYandex,
+		Nombre:            nombreUltimosSubidosYandex,
+		EsListadoEspecial: true,
+		Cargado:           true,
+	}
 	a.raizArbolYandex = &nodoArbolUI{
 		Origen:    modelo.OrigenYandex,
 		Ruta:      "disk:/",
@@ -773,6 +785,14 @@ func (a *Aplicacion) reconstruirArbolYandex() {
 func (a *Aplicacion) asegurarArbolYandex() {
 	if a.raizArbolYandex == nil {
 		a.reconstruirArbolYandex()
+	} else if a.nodoUltimosYandex == nil {
+		a.nodoUltimosYandex = &nodoArbolUI{
+			Origen:            modelo.OrigenYandex,
+			Ruta:              rutaUltimosSubidosYandex,
+			Nombre:            nombreUltimosSubidosYandex,
+			EsListadoEspecial: true,
+			Cargado:           true,
+		}
 	}
 	if a.raizArbolYandex != nil && !a.raizArbolYandex.Cargado && !a.raizArbolYandex.Cargando {
 		a.asegurarHijosNodo(a.raizArbolYandex)
@@ -853,6 +873,14 @@ func (a *Aplicacion) aplanarArbol() []nodoVisible {
 }
 
 func (a *Aplicacion) aplanarArbolYandex() []nodoVisible {
+	visibles := make([]nodoVisible, 0)
+	if a.nodoUltimosYandex != nil {
+		visibles = append(visibles, nodoVisible{Nodo: a.nodoUltimosYandex, Nivel: 0})
+	}
+	return append(visibles, a.aplanarArbolDesdeRaiz(a.raizArbolYandex)...)
+}
+
+func (a *Aplicacion) aplanarArbolYandexSoloCarpetas() []nodoVisible {
 	return a.aplanarArbolDesdeRaiz(a.raizArbolYandex)
 }
 
@@ -974,6 +1002,16 @@ func (a *Aplicacion) seleccionarCarpetaYandex(ruta string) {
 	a.reiniciarListado()
 }
 
+func (a *Aplicacion) seleccionarUltimosYandex() {
+	cambioListado := a.origenListado != origenListadoUltimosYandex || a.claveListadoActual != rutaUltimosSubidosYandex
+	if cambioListado {
+		a.descartarArchivoActivo()
+	}
+	a.origenListado = origenListadoUltimosYandex
+	a.claveListadoActual = rutaUltimosSubidosYandex
+	a.reiniciarListado()
+}
+
 func (a *Aplicacion) seleccionarEtiqueta(etiqueta string) {
 	etiqueta = strings.TrimSpace(etiqueta)
 	if etiqueta == "" {
@@ -1002,6 +1040,10 @@ func (a *Aplicacion) seleccionarUbicacionSinNombre() {
 
 func (a *Aplicacion) seleccionarNodoArbol(nodo *nodoArbolUI) {
 	if nodo == nil {
+		return
+	}
+	if nodo.EsListadoEspecial {
+		a.seleccionarUltimosYandex()
 		return
 	}
 	if !nodo.Cargado {
@@ -1106,6 +1148,8 @@ func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, prese
 		a.establecerEstado("Cargando elementos con GPS y sin valor Location", nil)
 	case origenListadoCarpetaYandex:
 		a.establecerEstado("Cargando elementos remotos de Yandex.Disk", nil)
+	case origenListadoUltimosYandex:
+		a.establecerEstado("Cargando últimos archivos agregados de Yandex.Disk", nil)
 	default:
 		sesion, err := a.listador.NuevaSesion(context.Background(), a.carpetaSeleccionada, a.filtros)
 		if err != nil {
@@ -1125,7 +1169,7 @@ func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, prese
 func (a *Aplicacion) calcularObjetivoRestauracionListado(posicion layout.Position) int {
 	objetivo := len(a.elementos)
 	pagina := a.configuracion.TamanoPaginaLocal
-	if a.origenListado == origenListadoCarpetaYandex {
+	if a.origenListado == origenListadoCarpetaYandex || a.origenListado == origenListadoUltimosYandex {
 		pagina = a.configuracion.TamanoPaginaRemota
 		if pagina < 20 {
 			pagina = 40
@@ -1169,7 +1213,7 @@ func (a *Aplicacion) cargarMasElementos() {
 	claveActual := a.claveListadoActual
 	offsetActual := a.offsetListado
 	limite := a.configuracion.TamanoPaginaLocal
-	if origenActual == origenListadoCarpetaYandex {
+	if origenActual == origenListadoCarpetaYandex || origenActual == origenListadoUltimosYandex {
 		limite = a.configuracion.TamanoPaginaRemota
 		if limite < 20 {
 			limite = 40
@@ -1221,9 +1265,17 @@ func (a *Aplicacion) cargarMasElementos() {
 		return
 	}
 
-	if origenActual == origenListadoCarpetaYandex {
+	if origenActual == origenListadoCarpetaYandex || origenActual == origenListadoUltimosYandex {
 		go func() {
-			lote, siguienteOffset, fin, err := a.listarElementosYandex(context.Background(), claveActual, a.filtros, limite, offsetActual)
+			var lote []modelo.Archivo
+			var siguienteOffset int
+			var fin bool
+			var err error
+			if origenActual == origenListadoUltimosYandex {
+				lote, siguienteOffset, fin, err = a.listarUltimosElementosYandex(context.Background(), a.filtros, limite, offsetActual)
+			} else {
+				lote, siguienteOffset, fin, err = a.listarElementosYandex(context.Background(), claveActual, a.filtros, limite, offsetActual)
+			}
 			a.encolarActualizacion(func() {
 				if versionActual != a.versionListado || origenActual != a.origenListado || claveActual != a.claveListadoActual {
 					return
@@ -1249,7 +1301,11 @@ func (a *Aplicacion) cargarMasElementos() {
 
 				if len(a.elementos) == 0 && fin {
 					a.objetivoListado = 0
-					a.establecerEstado("La carpeta remota no contiene elementos compatibles con los filtros activos", nil)
+					if origenActual == origenListadoUltimosYandex {
+						a.establecerEstado("No hay últimos archivos agregados compatibles con los filtros activos", nil)
+					} else {
+						a.establecerEstado("La carpeta remota no contiene elementos compatibles con los filtros activos", nil)
+					}
 					return
 				}
 				a.establecerEstado(fmt.Sprintf("%d elementos remotos visibles en memoria inmediata", len(a.elementos)), nil)
@@ -1332,6 +1388,21 @@ func (a *Aplicacion) listarDirectoriosYandex(ctx context.Context, ruta string) (
 }
 
 func (a *Aplicacion) listarElementosYandex(ctx context.Context, ruta string, filtros modelo.FiltrosListado, limite, desplazamiento int) ([]modelo.Archivo, int, bool, error) {
+	return a.listarElementosYandexCon(ctx, filtros, limite, desplazamiento, func(ctx context.Context, limite, desplazamiento int) ([]yandex.ElementoRemoto, error) {
+		return a.clienteYandex.ListarElementos(ctx, ruta, limite, desplazamiento)
+	})
+}
+
+func (a *Aplicacion) listarUltimosElementosYandex(ctx context.Context, filtros modelo.FiltrosListado, limite, desplazamiento int) ([]modelo.Archivo, int, bool, error) {
+	// El endpoint representa archivos recién cargados; aunque el servicio
+	// devolviera algún directorio, este origen no debe mostrarlo como archivo.
+	filtros.OcultarCarpetas = true
+	return a.listarElementosYandexCon(ctx, filtros, limite, desplazamiento, func(ctx context.Context, limite, desplazamiento int) ([]yandex.ElementoRemoto, error) {
+		return a.clienteYandex.ListarUltimosSubidos(ctx, limite, desplazamiento)
+	})
+}
+
+func (a *Aplicacion) listarElementosYandexCon(ctx context.Context, filtros modelo.FiltrosListado, limite, desplazamiento int, listar func(context.Context, int, int) ([]yandex.ElementoRemoto, error)) ([]modelo.Archivo, int, bool, error) {
 	if a.clienteYandex == nil || !a.clienteYandex.Configurado() {
 		return nil, desplazamiento, true, yandex.ErrNoImplementado
 	}
@@ -1353,7 +1424,7 @@ func (a *Aplicacion) listarElementosYandex(ctx context.Context, ruta string, fil
 	offsetActual := desplazamiento
 	resultados := make([]modelo.Archivo, 0, limite)
 	for len(resultados) < limite {
-		loteRemoto, err := a.clienteYandex.ListarElementos(ctx, ruta, tamanoPeticion, offsetActual)
+		loteRemoto, err := listar(ctx, tamanoPeticion, offsetActual)
 		if err != nil {
 			return nil, offsetActual, true, err
 		}
@@ -2039,9 +2110,9 @@ func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 	a.descartarEdicionRegiones()
 	a.descartarEdicionRecorte()
 	a.sincronizarReproductorVideo(archivo)
-	a.solicitarEnriquecimientoRemoto(archivo)
 	a.establecerRutaDestinoActivoLocal(a.rutaUsuario)
 	a.establecerRutaDestinoActivoRemoto(rutaPadreYandex(archivo.Ruta))
+	a.solicitarEnriquecimientoRemoto(archivo)
 }
 
 func (a *Aplicacion) archivoNecesitaEnriquecimiento(archivo modelo.Archivo) bool {
@@ -3742,6 +3813,8 @@ func (a *Aplicacion) tituloListadoActual() string {
 			return "Yandex.Disk"
 		}
 		return "Yandex.Disk: " + strings.TrimPrefix(a.carpetaYandexSeleccionada, "disk:/")
+	case origenListadoUltimosYandex:
+		return nombreUltimosSubidosYandex
 	default:
 		return a.carpetaSeleccionada
 	}
