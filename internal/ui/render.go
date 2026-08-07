@@ -469,11 +469,11 @@ func (a *Aplicacion) dibujarColumnaCentral(gtx layout.Context) layout.Dimensions
 					return a.dibujarControlesFiltros(gtx)
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					if len(a.rutasSeleccionadas()) < 2 {
-						return layout.Dimensions{}
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					if a.filtros.VistaGaleria {
+						return a.dibujarGaleria(gtx)
 					}
-					return a.dibujarBarraLote(gtx)
+					return a.dibujarListaElementos(gtx)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					if len(a.rutasSeleccionadas()) < 2 {
@@ -481,11 +481,11 @@ func (a *Aplicacion) dibujarColumnaCentral(gtx layout.Context) layout.Dimensions
 					}
 					return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx)
 				}),
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					if a.filtros.VistaGaleria {
-						return a.dibujarGaleria(gtx)
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if len(a.rutasSeleccionadas()) < 2 {
+						return layout.Dimensions{}
 					}
-					return a.dibujarListaElementos(gtx)
+					return a.dibujarBarraLote(gtx)
 				}),
 			)
 		})
