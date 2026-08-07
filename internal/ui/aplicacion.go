@@ -65,11 +65,13 @@ const (
 )
 
 const (
-	limiteMemoriaPreviewsDefecto  = 384 << 20
-	limiteCantidadPreviewsDefecto = 768
-	maxActualizacionesPorFrame    = 48
-	rutaUltimosSubidosYandex      = "yandex://last-uploaded"
-	nombreUltimosSubidosYandex    = "Últimos archivos agregados"
+	limiteMemoriaPreviewsDefecto      = 384 << 20
+	limiteCantidadPreviewsDefecto     = 768
+	limitePreviewsSimultaneas         = 4
+	limiteEnriquecimientosSimultaneos = 2
+	maxActualizacionesPorFrame        = 48
+	rutaUltimosSubidosYandex          = "yandex://last-uploaded"
+	nombreUltimosSubidosYandex        = "Últimos archivos agregados"
 )
 
 type opcionFiltroLateral struct {
@@ -151,6 +153,7 @@ type estadoSelectorDirectorio struct {
 type estadoPreview struct {
 	Imagen      image.Image
 	Cargando    bool
+	Fallo       bool
 	Maximo      int
 	Orientacion int
 	Rotacion    int
@@ -213,19 +216,28 @@ type Aplicacion struct {
 	vistaActual    tipoVista
 	pestanaLateral tipoPestanaLateral
 
-	filtros             modelo.FiltrosListado
-	carpetaSeleccionada string
-	origenListado       tipoOrigenListado
-	claveListadoActual  string
-	versionListado      int
-	offsetListado       int
-	objetivoListado     int
-	sesionListado       *indexador.SesionListado
-	elementos           []modelo.Archivo
-	cargandoElementos   bool
-	hayMasElementos     bool
-	seleccionLote       map[string]bool
-	anclaSeleccionLote  string
+	filtros                   modelo.FiltrosListado
+	carpetaSeleccionada       string
+	origenListado             tipoOrigenListado
+	claveListadoActual        string
+	versionListado            int
+	offsetListado             int
+	objetivoListado           int
+	sesionListado             *indexador.SesionListado
+	elementos                 []modelo.Archivo
+	cargandoElementos         bool
+	hayMasElementos           bool
+	previewsEnProceso         int
+	enriquecimientosEnProceso int
+
+	// La restauración de scroll se basa en la ruta visible y no sólo en el
+	// índice, porque las acciones sobre archivos cambian la lista.
+	rutaAnclaScrollListado     string
+	posicionAnclaScrollListado layout.Position
+	columnasGaleriaActual      int
+
+	seleccionLote      map[string]bool
+	anclaSeleccionLote string
 
 	archivoActivo      modelo.Archivo
 	tieneArchivoActivo bool
@@ -1119,6 +1131,12 @@ func (a *Aplicacion) reiniciarListadoPreservandoPosicion() {
 }
 
 func (a *Aplicacion) reiniciarListadoConPosicion(posicion layout.Position, preservarPosicion bool) {
+	if preservarPosicion {
+		a.prepararAnclaScrollListado(posicion)
+	} else {
+		a.rutaAnclaScrollListado = ""
+		a.posicionAnclaScrollListado = layout.Position{}
+	}
 	if a.sesionListado != nil {
 		_ = a.sesionListado.Cerrar()
 		a.sesionListado = nil
@@ -1177,7 +1195,11 @@ func (a *Aplicacion) calcularObjetivoRestauracionListado(posicion layout.Positio
 	} else if pagina < 32 {
 		pagina = 64
 	}
-	minimoVisible := posicion.First + pagina
+	columnas := 1
+	if a.filtros.VistaGaleria {
+		columnas = maximo(1, a.columnasGaleriaActual)
+	}
+	minimoVisible := (posicion.First + pagina) * columnas
 	if objetivo < minimoVisible {
 		objetivo = minimoVisible
 	}
@@ -1187,15 +1209,158 @@ func (a *Aplicacion) calcularObjetivoRestauracionListado(posicion layout.Positio
 	return objetivo
 }
 
+// prepararAnclaScrollListado identifica el elemento que estaba en la parte
+// superior de la lista antes de recargarla. La ruta permite restaurar la misma
+// referencia aunque se haya eliminado o movido otro elemento anterior.
+func (a *Aplicacion) prepararAnclaScrollListado(posicion layout.Position) {
+	a.rutaAnclaScrollListado = ""
+	a.posicionAnclaScrollListado = posicion
+	visuales := a.unidadesVisualesListado()
+	for indice := posicion.First; indice < len(visuales); indice++ {
+		if visuales[indice] != "" {
+			a.rutaAnclaScrollListado = visuales[indice]
+			return
+		}
+	}
+}
+
+// unidadesVisualesListado devuelve la primera ruta de cada fila o elemento
+// que consume una posición del widget.List. Las cadenas vacías representan
+// separadores de grupos recursivos.
+func (a *Aplicacion) unidadesVisualesListado() []string {
+	if len(a.elementos) == 0 {
+		return nil
+	}
+
+	agrupado := a.mostrarAgrupacionRecursivaPorCarpeta()
+	if !agrupado {
+		if !a.filtros.VistaGaleria {
+			visuales := make([]string, 0, len(a.elementos))
+			for _, archivo := range a.elementos {
+				visuales = append(visuales, archivo.Ruta)
+			}
+			return visuales
+		}
+
+		columnas := maximo(1, a.columnasGaleriaActual)
+		visuales := make([]string, 0, (len(a.elementos)+columnas-1)/columnas)
+		for inicio := 0; inicio < len(a.elementos); inicio += columnas {
+			visuales = append(visuales, a.elementos[inicio].Ruta)
+		}
+		return visuales
+	}
+
+	grupos := a.agruparElementosPorCarpeta()
+	var visuales []string
+	for _, grupo := range grupos {
+		visuales = append(visuales, "")
+		if !a.filtros.VistaGaleria {
+			for _, archivo := range grupo.Elementos {
+				visuales = append(visuales, archivo.Ruta)
+			}
+			continue
+		}
+
+		columnas := maximo(1, a.columnasGaleriaActual)
+		for inicio := 0; inicio < len(grupo.Elementos); inicio += columnas {
+			visuales = append(visuales, grupo.Elementos[inicio].Ruta)
+		}
+	}
+	return visuales
+}
+
+func (a *Aplicacion) restaurarAnclaScrollListado() bool {
+	if a.rutaAnclaScrollListado == "" {
+		return false
+	}
+	if indice, ok := a.indiceUnidadVisualPorRuta(a.rutaAnclaScrollListado); ok {
+		posicion := a.listaCentro.Position
+		posicion.First = indice
+		posicion.Offset = a.posicionAnclaScrollListado.Offset
+		posicion.BeforeEnd = true
+		a.listaCentro.Position = posicion
+		a.rutaAnclaScrollListado = ""
+		return true
+	}
+	return false
+}
+
+func (a *Aplicacion) indiceUnidadVisualPorRuta(ruta string) (int, bool) {
+	if strings.TrimSpace(ruta) == "" || len(a.elementos) == 0 {
+		return 0, false
+	}
+
+	columnas := maximo(1, a.columnasGaleriaActual)
+	if !a.mostrarAgrupacionRecursivaPorCarpeta() {
+		for indice, archivo := range a.elementos {
+			if archivo.Ruta != ruta {
+				continue
+			}
+			if a.filtros.VistaGaleria {
+				return indice / columnas, true
+			}
+			return indice, true
+		}
+		return 0, false
+	}
+
+	visual := 0
+	for _, grupo := range a.agruparElementosPorCarpeta() {
+		visual++
+		if !a.filtros.VistaGaleria {
+			for _, archivo := range grupo.Elementos {
+				if archivo.Ruta == ruta {
+					return visual, true
+				}
+				visual++
+			}
+			continue
+		}
+
+		for inicio := 0; inicio < len(grupo.Elementos); inicio += columnas {
+			fin := minimo(inicio+columnas, len(grupo.Elementos))
+			for _, archivo := range grupo.Elementos[inicio:fin] {
+				if archivo.Ruta == ruta {
+					return visual, true
+				}
+			}
+			visual++
+		}
+	}
+	return 0, false
+}
+
 func (a *Aplicacion) continuarRestauracionListadoSiHaceFalta() {
 	if a.objetivoListado <= 0 {
 		return
 	}
-	if len(a.elementos) >= a.objetivoListado || !a.hayMasElementos {
+	if a.restaurarAnclaScrollListado() {
 		a.objetivoListado = 0
 		return
 	}
-	a.cargarMasElementos()
+	if len(a.elementos) < a.objetivoListado && a.hayMasElementos {
+		a.cargarMasElementos()
+		return
+	}
+
+	// Si el elemento ancla fue el que se movió o eliminó, conserva el índice
+	// aproximado para que el contenido cercano permanezca en pantalla.
+	if a.rutaAnclaScrollListado != "" {
+		visuales := a.unidadesVisualesListado()
+		if len(visuales) > 0 {
+			indice := a.posicionAnclaScrollListado.First
+			if indice >= len(visuales) {
+				indice = len(visuales) - 1
+			}
+			posicion := a.listaCentro.Position
+			posicion.First = indice
+			posicion.Offset = a.posicionAnclaScrollListado.Offset
+			posicion.BeforeEnd = true
+			a.listaCentro.Position = posicion
+		}
+		a.rutaAnclaScrollListado = ""
+	}
+	a.objetivoListado = 0
 }
 
 func (a *Aplicacion) cargarMasElementos() {
@@ -1247,9 +1412,6 @@ func (a *Aplicacion) cargarMasElementos() {
 
 				for _, elemento := range lote {
 					a.elementos = append(a.elementos, elemento)
-					if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
-						a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
-					}
 				}
 				a.hayMasElementos = !fin
 				a.continuarRestauracionListadoSiHaceFalta()
@@ -1291,9 +1453,6 @@ func (a *Aplicacion) cargarMasElementos() {
 
 				for _, elemento := range lote {
 					a.elementos = append(a.elementos, elemento)
-					if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
-						a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
-					}
 				}
 				a.offsetListado = siguienteOffset
 				a.hayMasElementos = !fin
@@ -1345,9 +1504,6 @@ func (a *Aplicacion) cargarMasElementos() {
 
 			for _, elemento := range lote {
 				a.elementos = append(a.elementos, elemento)
-				if _, existe := a.elementoWidgets[elemento.Ruta]; !existe {
-					a.elementoWidgets[elemento.Ruta] = &widgetsElemento{}
-				}
 			}
 			a.offsetListado = offsetActual + len(lote)
 			a.hayMasElementos = !fin
@@ -2277,10 +2433,17 @@ func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) 
 	if !archivoEsLocal(archivo) || archivo.Ruta == "" || !a.archivoDebeVerificarseConSistema(archivo) {
 		return
 	}
+	if a.metadatosPendientes == nil {
+		a.metadatosPendientes = make(map[string]bool)
+	}
 	if a.metadatosPendientes[archivo.Ruta] {
 		return
 	}
+	if a.enriquecimientosEnProceso >= limiteEnriquecimientosSimultaneos {
+		return
+	}
 	a.metadatosPendientes[archivo.Ruta] = true
+	a.enriquecimientosEnProceso++
 
 	go func() {
 		enriquecido, errAnalisis := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
@@ -2290,11 +2453,18 @@ func (a *Aplicacion) solicitarEnriquecimientoExplorador(archivo modelo.Archivo) 
 		}
 		a.encolarActualizacion(func() {
 			delete(a.metadatosPendientes, archivo.Ruta)
+			if a.enriquecimientosEnProceso > 0 {
+				a.enriquecimientosEnProceso--
+			}
 			if errAnalisis != nil {
+				// Un fallo no debe relanzar exiftool en cada frame. Se
+				// reintentará si cambia la fecha de modificación del archivo.
+				a.marcarArchivoVerificadoConSistema(archivo)
 				a.establecerEstado("No se pudieron precargar todos los metadatos del explorador", errAnalisis)
 				return
 			}
 			if errGuardar != nil {
+				a.marcarArchivoVerificadoConSistema(enriquecido)
 				a.establecerEstado("No se pudo persistir el enriquecimiento precargado del explorador", errGuardar)
 				return
 			}
@@ -2479,6 +2649,12 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 		if preview.Cargando {
 			return
 		}
+		if preview.Fallo &&
+			preview.Maximo >= tamanoMaximo &&
+			preview.Orientacion == orientacionObjetivo &&
+			preview.Rotacion == rotacionObjetivo {
+			return
+		}
 		if preview.Imagen != nil &&
 			preview.Maximo >= tamanoMaximo &&
 			preview.Orientacion == orientacionObjetivo &&
@@ -2496,6 +2672,9 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 	if maximoActual > tamanoMaximo {
 		return
 	}
+	if a.previewsEnProceso >= limitePreviewsSimultaneas {
+		return
+	}
 	a.guardarPreview(archivo.Ruta, &estadoPreview{
 		Imagen:      imagenActual,
 		Cargando:    true,
@@ -2503,22 +2682,33 @@ func (a *Aplicacion) solicitarPreview(archivo modelo.Archivo, tamanoMaximo int) 
 		Orientacion: orientacionObjetivo,
 		Rotacion:    rotacionObjetivo,
 	})
+	a.previewsEnProceso++
 
 	go func() {
 		imagen, err := a.decodificarPreview(archivo, tamanoMaximo)
 		a.encolarActualizacion(func() {
+			if a.previewsEnProceso > 0 {
+				a.previewsEnProceso--
+			}
 			if err != nil {
 				if imagenActual != nil {
 					a.guardarPreview(archivo.Ruta, &estadoPreview{
 						Imagen:      imagenActual,
 						Cargando:    false,
+						Fallo:       true,
 						Maximo:      maximoActual,
 						Orientacion: orientacionObjetivo,
 						Rotacion:    rotacionObjetivo,
 					})
 					return
 				}
-				a.eliminarPreview(archivo.Ruta)
+				a.guardarPreview(archivo.Ruta, &estadoPreview{
+					Cargando:    false,
+					Fallo:       true,
+					Maximo:      tamanoMaximo,
+					Orientacion: orientacionObjetivo,
+					Rotacion:    rotacionObjetivo,
+				})
 				return
 			}
 			a.guardarPreview(archivo.Ruta, &estadoPreview{

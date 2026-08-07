@@ -1281,6 +1281,7 @@ func (a *Aplicacion) parametrosGaleria(gtx layout.Context) (columnas, anchoTarje
 	anchoMaximo := maximo(anchoMinimo, gtx.Dp(unit.Dp(512)))
 	disponible := gtx.Constraints.Max.X
 	if disponible <= 0 {
+		a.columnasGaleriaActual = 1
 		return 1, anchoMinimo, separacion
 	}
 
@@ -1293,6 +1294,7 @@ func (a *Aplicacion) parametrosGaleria(gtx layout.Context) (columnas, anchoTarje
 		anchoTarjeta = anchoMinimo
 	}
 
+	a.columnasGaleriaActual = columnas
 	return columnas, anchoTarjeta, separacion
 }
 
