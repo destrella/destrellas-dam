@@ -184,6 +184,32 @@ func TestSincronizarEditoresMetadatosSugiereZonaDesdeNombreConMilisegundosYZ(t *
 	}
 }
 
+func TestInferirProcedenciaArchivoUsaMetadatosMultimedia(t *testing.T) {
+	t.Parallel()
+
+	t.Run("video desde comentario QuickTime", func(t *testing.T) {
+		makeInferido, modeloInferido, _ := inferirProcedenciaArchivo(modelo.Archivo{
+			Metadatos: modelo.MetadatosArchivo{
+				Comentario: "Post URL: https://www.instagram.com/p/DYZoYyONpjY/. User URL: https://www.instagram.com/uid/64241627787",
+			},
+		})
+		if makeInferido != "Red social" || modeloInferido != "Instagram" {
+			t.Fatalf("sugerencia inesperada: make=%q, modelo=%q", makeInferido, modeloInferido)
+		}
+	})
+
+	t.Run("imagen desde XPKeywords", func(t *testing.T) {
+		makeInferido, modeloInferido, _ := inferirProcedenciaArchivo(modelo.Archivo{
+			Metadatos: modelo.MetadatosArchivo{
+				PalabrasClave: []string{"https://www.instagram.com/p/Dbsvca8OcTd/"},
+			},
+		})
+		if makeInferido != "Red social" || modeloInferido != "Instagram" {
+			t.Fatalf("sugerencia inesperada: make=%q, modelo=%q", makeInferido, modeloInferido)
+		}
+	})
+}
+
 func TestArchivoDebeVerificarseConSistemaUnaVezPorRevision(t *testing.T) {
 	t.Parallel()
 

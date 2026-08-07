@@ -1192,7 +1192,7 @@ func (s *Servicio) analizarConExiftool(ctx context.Context, archivo modelo.Archi
 	archivo.Metadatos.Ubicacion = extraerCadena(documento, "Location", "Sub-location", "SubLocation")
 	archivo.Metadatos.Comentario = extraerTextoCombinado(documento, "Description", "ImageDescription", "UserComment", "XPComment", "Comment")
 	archivo.Metadatos.PalabrasClave = normalizarLista(
-		extraerListaCadenas(documento, "Keywords", "Keyword", "HierarchicalSubject"),
+		extraerListaCadenas(documento, "Keywords", "Keyword", "HierarchicalSubject", "XPKeywords"),
 	)
 	archivo.Metadatos.Sujetos = normalizarLista(
 		extraerListaCadenas(documento, "Subject"),

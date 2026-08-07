@@ -498,7 +498,7 @@ func inferirProcedenciaArchivo(archivo modelo.Archivo) (makeInferido, modeloInfe
 		}
 	}
 
-	redSocial := inferirRedSocial(archivo.Metadatos.WhereFroms)
+	redSocial := inferirRedSocial(fuentesProcedenciaArchivo(archivo))
 	if redSocial != "" {
 		makeInferido = "Red social"
 		if modeloInferido == "" {
@@ -506,6 +506,24 @@ func inferirProcedenciaArchivo(archivo modelo.Archivo) (makeInferido, modeloInfe
 		}
 	}
 	return strings.TrimSpace(makeInferido), strings.TrimSpace(modeloInferido), strings.TrimSpace(softwareInferido)
+}
+
+// fuentesProcedenciaArchivo reúne las fuentes donde suelen quedar URLs de la
+// red social cuando un navegador no puede conservar un WhereFroms utilizable.
+func fuentesProcedenciaArchivo(archivo modelo.Archivo) []string {
+	fuentes := make([]string, 0,
+		len(archivo.Metadatos.WhereFroms)+
+			len(archivo.Metadatos.PalabrasClave)+
+			len(archivo.Metadatos.Sujetos)+2,
+	)
+	fuentes = append(fuentes, archivo.Metadatos.WhereFroms...)
+	fuentes = append(fuentes, archivo.Metadatos.Comentario)
+	fuentes = append(fuentes, archivo.Metadatos.PalabrasClave...)
+	fuentes = append(fuentes, archivo.Metadatos.Sujetos...)
+	for _, valores := range archivo.Metadatos.Extras {
+		fuentes = append(fuentes, valores...)
+	}
+	return fuentes
 }
 
 func textoIAArchivo(archivo modelo.Archivo) string {
