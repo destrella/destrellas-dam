@@ -1480,7 +1480,7 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 		maximoPreview = 4_096
 	}
 
-	if archivoEsRemotoYandex(archivo) || archivo.Tipo != modelo.TipoVideo {
+	if !visorUsaReproductorVideo(archivo) {
 		interactiva := archivoEsLocal(archivo)
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -1533,7 +1533,14 @@ func (a *Aplicacion) dibujarPreviewGrande(gtx layout.Context, archivo modelo.Arc
 }
 
 func (a *Aplicacion) debeMostrarIndicadorCargaVideo() bool {
-	return a.reproductorVideo.Cargando && (!a.reproductorVideo.Reproduciendo || a.reproductorVideo.MostrarCarga)
+func visorUsaReproductorVideo(archivo modelo.Archivo) bool {
+	return archivo.Tipo == modelo.TipoVideo
+}
+
+	if a.reproductorVideo.Cargando && (!a.reproductorVideo.Reproduciendo || a.reproductorVideo.MostrarCarga) {
+		return true
+	}
+	return a.reproductorVideo.Reproduciendo && a.reproducirAudioVideo && a.audioVideoIniciado && !a.audioVideoListo
 }
 
 func (a *Aplicacion) dibujarOverlayCargaVideo(gtx layout.Context) layout.Dimensions {

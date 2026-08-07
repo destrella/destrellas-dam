@@ -460,6 +460,8 @@ type Aplicacion struct {
 	audioVideoVersion            int
 	audioVideoIniciado           bool
 }
+	audioVideoListo              bool
+	audioVideoPausado            bool
 
 // NuevaAplicacion construye la interfaz y sincroniza sus widgets con la configuracion.
 func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
@@ -2036,7 +2038,8 @@ func (a *Aplicacion) activarArchivo(archivo modelo.Archivo) {
 	}
 	a.descartarEdicionRegiones()
 	a.descartarEdicionRecorte()
-	a.limpiarReproductorVideo()
+	a.sincronizarReproductorVideo(archivo)
+	a.solicitarEnriquecimientoRemoto(archivo)
 	a.establecerRutaDestinoActivoLocal(a.rutaUsuario)
 	a.establecerRutaDestinoActivoRemoto(rutaPadreYandex(archivo.Ruta))
 }
@@ -2160,6 +2163,41 @@ func (a *Aplicacion) enriquecerArchivoActiva(archivo modelo.Archivo) {
 				a.sincronizarEditoresMetadatos(enriquecido)
 			}
 			a.recargarColeccionesLaterales()
+		})
+	}()
+}
+
+func (a *Aplicacion) solicitarEnriquecimientoRemoto(archivo modelo.Archivo) {
+	if !archivoEsRemotoYandex(archivo) || archivo.Tipo != modelo.TipoVideo || a.servicioMetadatos == nil {
+		return
+	}
+
+	ruta := archivo.Ruta
+	a.reproductorVideo.MetadatosCargando = true
+	go func() {
+		enriquecido, errAnalisis := a.servicioMetadatos.AnalizarArchivo(context.Background(), archivo)
+		a.encolarActualizacion(func() {
+			if errAnalisis != nil {
+				if a.tieneArchivoActivo && a.archivoActivo.Ruta == ruta {
+					a.reproductorVideo.MetadatosCargando = false
+					a.reproductorVideo.ReproduccionPendiente = false
+					a.reproductorVideo.Reproduciendo = false
+					a.reproductorVideo.Cargando = false
+					a.reproductorVideo.MostrarCarga = false
+					a.establecerEstado("No se pudieron cargar los metadatos remotos del video", errAnalisis)
+				}
+				return
+			}
+
+			a.reemplazarArchivoEnMemoria(enriquecido)
+			if a.tieneArchivoActivo && a.archivoActivo.Ruta == ruta {
+				a.archivoActivo = enriquecido
+				a.sincronizarReproductorVideo(enriquecido)
+				a.reproductorVideo.MetadatosCargando = false
+				if a.reproductorVideo.ReproduccionPendiente && a.reproductorVideo.Duracion > 0 {
+					a.comenzarReproduccionVideo()
+				}
+			}
 		})
 	}()
 }

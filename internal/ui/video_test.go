@@ -53,6 +53,59 @@ func TestSincronizarReproductorVideoUsaFPSDelArchivo(t *testing.T) {
 	}
 }
 
+func TestVisorUsaReproductorParaVideoRemoto(t *testing.T) {
+	if !visorUsaReproductorVideo(modelo.Archivo{
+		Origen: modelo.OrigenYandex,
+		Tipo:   modelo.TipoVideo,
+	}) {
+		t.Fatal("el visor debería mostrar el reproductor para videos remotos")
+	}
+	if visorUsaReproductorVideo(modelo.Archivo{
+		Origen: modelo.OrigenYandex,
+		Tipo:   modelo.TipoImagen,
+	}) {
+		t.Fatal("el visor no debería mostrar el reproductor para imágenes remotas")
+	}
+}
+
+func TestAlternarReproductorVideoDejaPendienteElPlayMientrasCarganMetadatos(t *testing.T) {
+	app := &Aplicacion{
+		tieneArchivoActivo: true,
+		archivoActivo: modelo.Archivo{
+			Origen: modelo.OrigenYandex,
+			Ruta:   "disk:/media/Videos/prueba.mp4",
+			Tipo:   modelo.TipoVideo,
+		},
+		reproductorVideo: estadoReproductorVideo{
+			Ruta:              "disk:/media/Videos/prueba.mp4",
+			MetadatosCargando: true,
+		},
+	}
+
+	app.alternarReproductorVideo()
+
+	if !app.reproductorVideo.Reproduciendo || !app.reproductorVideo.ReproduccionPendiente {
+		t.Fatal("el primer play debería quedar pendiente mientras se cargan los metadatos")
+	}
+	if !app.reproductorVideo.Cargando || !app.reproductorVideo.MostrarCarga {
+		t.Fatal("el primer play debería mostrar la carga mientras espera los metadatos")
+	}
+}
+
+func TestCacheLotesVideoReutilizaUnBloque(t *testing.T) {
+	app := &Aplicacion{}
+	fotogramas := []fotogramaBufferVideo{{Instante: time.Second, Imagen: image.NewRGBA(image.Rect(0, 0, 1, 1))}}
+	app.guardarLoteCacheVideo(time.Second, 960, fotogramas)
+
+	obtenidos, existe := app.buscarLoteCacheVideo(time.Second, 640)
+	if !existe || len(obtenidos) != 1 || obtenidos[0].Instante != time.Second {
+		t.Fatal("la caché debería reutilizar el lote con un máximo menor")
+	}
+	if _, existe := app.buscarLoteCacheVideo(time.Second, 1_200); existe {
+		t.Fatal("la caché no debería reutilizar un lote con resolución insuficiente")
+	}
+}
+
 func TestDebePrecargarSiguienteLoteSeDetieneCercaDelFinal(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +153,30 @@ func TestDebePrecargarSiguienteLoteEnLoopPideElInicio(t *testing.T) {
 	}
 }
 
+func TestDebeAnticiparSiguienteLoteAlRecibirElBufferInicial(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		reproductorVideo: estadoReproductorVideo{
+			Reproduciendo:    true,
+			FotogramasPorSeg: 12,
+			Posicion:         0,
+			InicioBuffer:     0,
+			FinBuffer:        4 * time.Second,
+			Fotogramas:       []fotogramaBufferVideo{{Instante: 0}},
+		},
+	}
+
+	if !app.debeAnticiparSiguienteLote() {
+		t.Fatal("el primer bloque debería solicitar inmediatamente el siguiente lote")
+	}
+
+	app.reproductorVideo.FinBuffer = 7 * time.Second
+	if app.debeAnticiparSiguienteLote() {
+		t.Fatal("no debería encadenar más de un lote adelantado")
+	}
+}
+
 func TestActivarBufferInicioLoopCambiaAlPrimerFotograma(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +202,34 @@ func TestActivarBufferInicioLoopCambiaAlPrimerFotograma(t *testing.T) {
 	}
 	if app.reproductorVideo.Fotograma == nil {
 		t.Fatal("debería mostrar el primer fotograma del nuevo ciclo")
+	}
+}
+
+func TestActivarBufferInicioLoopPendienteAlLlegarDespuesDelFinal(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		reproducirVideoEnLoop: true,
+		reproductorVideo: estadoReproductorVideo{
+			Reproduciendo: true,
+			Posicion:      0,
+			Fotogramas:    []fotogramaBufferVideo{{Instante: 4 * time.Second}},
+			InicioBuffer:  4 * time.Second,
+			FinBuffer:     5 * time.Second,
+			FotogramasInicioLoop: []fotogramaBufferVideo{
+				{Instante: 0, Imagen: image.NewRGBA(image.Rect(0, 0, 1, 1))},
+				{Instante: 500 * time.Millisecond, Imagen: image.NewRGBA(image.Rect(0, 0, 1, 1))},
+			},
+		},
+	}
+
+	app.activarBufferInicioLoopPendiente()
+
+	if app.reproductorVideo.InicioBuffer != 0 || app.reproductorVideo.FinBuffer != 500*time.Millisecond {
+		t.Fatalf("el lote que llegó tarde debería activarse en el nuevo ciclo, se obtuvo %v-%v", app.reproductorVideo.InicioBuffer, app.reproductorVideo.FinBuffer)
+	}
+	if app.reproductorVideo.Fotograma == nil {
+		t.Fatal("el nuevo ciclo debería mostrar el primer fotograma disponible")
 	}
 }
 
@@ -364,6 +469,53 @@ func TestAudioVideoDisponibleRequierePistaDeclarada(t *testing.T) {
 	app.archivoActivo.TieneAudio = false
 	if app.audioVideoDisponible() {
 		t.Fatal("no debería considerar disponible el audio cuando el video no tiene pista")
+	}
+}
+
+func TestMaximoFotogramaBufferReduceResolucionEnAltaTasa(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		reproductorVideo: estadoReproductorVideo{FotogramasPorSeg: 60},
+	}
+
+	altaTasa := app.maximoFotogramaBuffer(960)
+	if altaTasa >= 960 || altaTasa < 480 {
+		t.Fatalf("60 FPS debería reducir la resolución del buffer dentro de un rango seguro, se obtuvo %d", altaTasa)
+	}
+
+	app.reproductorVideo.FotogramasPorSeg = 30
+	if normal := app.maximoFotogramaBuffer(960); normal != 960 {
+		t.Fatalf("30 FPS debería conservar la resolución solicitada, se obtuvo %d", normal)
+	}
+}
+
+func TestLoteAltaTasaAmpliaCoberturaYMargen(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		reproductorVideo: estadoReproductorVideo{FotogramasPorSeg: 60},
+	}
+
+	if cantidad := app.cantidadFotogramasLoteBuffer(); cantidad != 360 {
+		t.Fatalf("60 FPS debería usar un lote de seis segundos, se obtuvieron %d fotogramas", cantidad)
+	}
+	if margen := app.margenPrecargaBuffer(); diferenciaDuracion(margen, 4500*time.Millisecond) > app.intervaloFotogramasBuffer() {
+		t.Fatalf("el lote de alta tasa debería solicitarse con 4.5 s de margen, se obtuvo %v", margen)
+	}
+}
+
+func TestNoConservaCacheDuplicadoEnAltaTasa(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		reproducirVideoEnLoop: true,
+		reproductorVideo:      estadoReproductorVideo{FotogramasPorSeg: 60},
+	}
+	archivo := modelo.Archivo{Origen: modelo.OrigenYandex}
+
+	if app.debeConservarLoteCacheVideo(archivo) {
+		t.Fatal("los videos de alta tasa no deberían duplicar lotes completos en cache")
 	}
 }
 

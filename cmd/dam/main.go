@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"io"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"gioui.org/app"
 	"gioui.org/unit"
@@ -34,12 +38,24 @@ func main() {
 	}
 	defer almacenSQLite.Cerrar()
 
+	clienteYandex := yandex.NuevoCliente(cfg.ClaveAPIYandex)
 	servicioMetadatos := metadatos.NuevoServicio()
+	servicioMetadatos.EstablecerResolverFuenteVideo(func(ctx context.Context, ruta string) (string, error) {
+		if strings.HasPrefix(strings.TrimSpace(ruta), "disk:/") {
+			return clienteYandex.URLDescarga(ctx, ruta)
+		}
+		return ruta, nil
+	})
+	servicioMetadatos.EstablecerDescargadorFuenteVideo(filepath.Join(rutas.DirectorioCache, "videos"), func(ctx context.Context, ruta string) (io.ReadCloser, error) {
+		if !strings.HasPrefix(strings.TrimSpace(ruta), "disk:/") {
+			return nil, yandex.ErrNoImplementado
+		}
+		return clienteYandex.Descargar(ctx, ruta)
+	})
 	servicioArchivos := archivos.NuevoServicio(cfg.CarpetaArchivado)
 	listador := indexador.NuevoListadorLocal(almacenSQLite)
 	servicioIndexador := indexador.NuevoServicio(almacenSQLite, servicioMetadatos, cfg.ConcurrenciaIndexado)
 	servicioDuplicados := duplicados.NuevoServicio(almacenSQLite, servicioIndexador)
-	clienteYandex := yandex.NuevoCliente(cfg.ClaveAPIYandex)
 
 	go func() {
 		ventana := new(app.Window)

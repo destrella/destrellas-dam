@@ -33,18 +33,38 @@ import (
 	"destrellas-dam/internal/plataforma"
 )
 
+// ResolverFuenteVideo obtiene una fuente reproducible para una ruta lógica.
+// Para archivos locales devuelve normalmente la misma ruta; para fuentes
+// remotas puede devolver una URL temporal con soporte HTTP Range.
+type ResolverFuenteVideo func(context.Context, string) (string, error)
+
+// DescargadorFuenteVideo obtiene una copia local temporal de una fuente remota.
+// Si falla o rebasa el límite de caché, se conserva el streaming directo.
+type DescargadorFuenteVideo func(context.Context, string) (io.ReadCloser, error)
+
+const limiteCacheFuenteVideo int64 = 64 << 20
+
 // Servicio encapsula herramientas externas y analisis ligeros en Go.
 type Servicio struct {
-	rutaExiftool      string
-	rutaFFmpeg        string
-	rutaFFprobe       string
-	rutaMagick        string
-	rutaQLManage      string
-	formatosLote      sync.Map
-	audioContextOnce  sync.Once
-	audioContext      *oto.Context
-	audioContextListo chan struct{}
-	audioContextErr   error
+	rutaExiftool         string
+	rutaFFmpeg           string
+	rutaFFprobe          string
+	rutaMagick           string
+	rutaQLManage         string
+	formatosLote         sync.Map
+	audioContextOnce     sync.Once
+	audioPlayerMutex     sync.Mutex
+	audioPlayer          *oto.Player
+	audioContext         *oto.Context
+	audioContextListo    chan struct{}
+	audioContextErr      error
+	resolverFuenteVideo  ResolverFuenteVideo
+	descargadorVideo     DescargadorFuenteVideo
+	directorioCacheVideo string
+	cacheVideoMutex      sync.Mutex
+	cacheVideos          map[string]string
+	fuentesVideoSinCache map[string]bool
+	cargasCacheVideo     map[string]chan struct{}
 }
 
 // FotogramaVideo representa un cuadro decodificado y su instante aproximado.
@@ -71,6 +91,161 @@ func NuevoServicio() *Servicio {
 	}
 }
 
+// EstablecerResolverFuenteVideo configura la resolución de rutas remotas para
+// las operaciones de análisis y reproducción de video.
+func (s *Servicio) EstablecerResolverFuenteVideo(resolver ResolverFuenteVideo) {
+	if s == nil {
+		return
+	}
+	s.resolverFuenteVideo = resolver
+}
+
+// EstablecerDescargadorFuenteVideo activa una caché local de sesión para
+// fuentes remotas pequeñas. Esto evita que cada lote de frames reinicie ffmpeg
+// sobre la misma URL HTTP.
+func (s *Servicio) EstablecerDescargadorFuenteVideo(directorio string, descargador DescargadorFuenteVideo) {
+	if s == nil {
+		return
+	}
+	s.descargadorVideo = descargador
+	s.directorioCacheVideo = strings.TrimSpace(directorio)
+}
+
+// RegistrarTamanoFuenteVideo evita iniciar una descarga de caché que ya se
+// sabe demasiado grande. Los listados remotos de Yandex incluyen este dato.
+func (s *Servicio) RegistrarTamanoFuenteVideo(ruta string, tamano int64) {
+	if s == nil || tamano <= limiteCacheFuenteVideo {
+		return
+	}
+	ruta = strings.TrimSpace(ruta)
+	if ruta == "" {
+		return
+	}
+	s.cacheVideoMutex.Lock()
+	if s.fuentesVideoSinCache == nil {
+		s.fuentesVideoSinCache = make(map[string]bool)
+	}
+	s.fuentesVideoSinCache[ruta] = true
+	s.cacheVideoMutex.Unlock()
+}
+
+func (s *Servicio) resolverFuente(ctx context.Context, ruta string) (string, error) {
+	if s != nil && s.descargadorVideo != nil && s.directorioCacheVideo != "" {
+		if fuente, existe := s.fuenteVideoEnCache(ctx, ruta); existe {
+			return fuente, nil
+		}
+	}
+	return s.resolverFuenteDirecta(ctx, ruta)
+}
+
+func (s *Servicio) resolverFuenteDirecta(ctx context.Context, ruta string) (string, error) {
+	if s == nil || s.resolverFuenteVideo == nil {
+		return ruta, nil
+	}
+	fuente, err := s.resolverFuenteVideo(ctx, ruta)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(fuente) == "" {
+		return "", fmt.Errorf("el resolvedor devolvió una fuente de video vacía para %q", ruta)
+	}
+	return fuente, nil
+}
+
+func (s *Servicio) fuenteVideoEnCache(ctx context.Context, ruta string) (string, bool) {
+	ruta = strings.TrimSpace(ruta)
+	if ruta == "" {
+		return "", false
+	}
+
+	s.cacheVideoMutex.Lock()
+	if s.fuentesVideoSinCache[ruta] {
+		s.cacheVideoMutex.Unlock()
+		return "", false
+	}
+	if s.cacheVideos != nil {
+		if archivo := s.cacheVideos[ruta]; archivo != "" {
+			if _, err := os.Stat(archivo); err == nil {
+				s.cacheVideoMutex.Unlock()
+				return archivo, true
+			}
+			delete(s.cacheVideos, ruta)
+		}
+	}
+	if s.cargasCacheVideo != nil {
+		if espera := s.cargasCacheVideo[ruta]; espera != nil {
+			s.cacheVideoMutex.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", false
+			case <-espera:
+			}
+			return s.fuenteVideoEnCache(ctx, ruta)
+		}
+	}
+	if s.cargasCacheVideo == nil {
+		s.cargasCacheVideo = make(map[string]chan struct{})
+	}
+	espera := make(chan struct{})
+	s.cargasCacheVideo[ruta] = espera
+	s.cacheVideoMutex.Unlock()
+
+	archivo, cacheado := s.descargarFuenteVideoEnCache(ctx, ruta, limiteCacheFuenteVideo)
+
+	s.cacheVideoMutex.Lock()
+	delete(s.cargasCacheVideo, ruta)
+	if cacheado {
+		if s.cacheVideos == nil {
+			s.cacheVideos = make(map[string]string)
+		}
+		s.cacheVideos[ruta] = archivo
+	} else {
+		// No repetimos en cada lote una descarga que ya falló o superó el
+		// límite. A partir de aquí se usa directamente el streaming HTTP.
+		if s.fuentesVideoSinCache == nil {
+			s.fuentesVideoSinCache = make(map[string]bool)
+		}
+		s.fuentesVideoSinCache[ruta] = true
+	}
+	close(espera)
+	s.cacheVideoMutex.Unlock()
+	return archivo, cacheado
+}
+
+func (s *Servicio) descargarFuenteVideoEnCache(ctx context.Context, ruta string, limite int64) (string, bool) {
+	lector, err := s.descargadorVideo(ctx, ruta)
+	if err != nil || lector == nil {
+		return "", false
+	}
+	defer lector.Close()
+
+	if err := os.MkdirAll(s.directorioCacheVideo, 0o755); err != nil {
+		return "", false
+	}
+	archivo, err := os.CreateTemp(s.directorioCacheVideo, "video-remoto-*.media")
+	if err != nil {
+		return "", false
+	}
+	rutaCache := archivo.Name()
+	defer func() {
+		_ = archivo.Close()
+		if rutaCache != "" {
+			_ = os.Remove(rutaCache)
+		}
+	}()
+
+	copiados, err := io.Copy(archivo, io.LimitReader(lector, limite+1))
+	if err != nil || copiados > limite {
+		return "", false
+	}
+	if err := archivo.Close(); err != nil {
+		return "", false
+	}
+	resultado := rutaCache
+	rutaCache = ""
+	return resultado, true
+}
+
 // TieneExiftool permite degradar funcionalidad de forma elegante.
 func (s *Servicio) TieneExiftool() bool {
 	return s != nil && s.rutaExiftool != ""
@@ -82,8 +257,12 @@ func (s *Servicio) AnalizarArchivo(ctx context.Context, archivo modelo.Archivo) 
 		return archivo, nil
 	}
 
+	esRemoto := archivo.Origen == modelo.OrigenYandex
+	if esRemoto {
+		s.RegistrarTamanoFuenteVideo(archivo.Ruta, archivo.Tamano)
+	}
 	var primerError error
-	if archivoSoportaExiftool(archivo) && s.TieneExiftool() {
+	if !esRemoto && archivoSoportaExiftool(archivo) && s.TieneExiftool() {
 		enriquecido, err := s.analizarConExiftool(ctx, archivo)
 		if err == nil {
 			archivo = enriquecido
@@ -118,9 +297,11 @@ func (s *Servicio) AnalizarArchivo(ctx context.Context, archivo modelo.Archivo) 
 		}
 	}
 
-	if whereFroms, err := plataforma.LeerWhereFroms(ctx, archivo.Ruta); err == nil && len(whereFroms) > 0 {
-		archivo.Metadatos.WhereFroms = whereFroms
-		archivo.Indicadores.TieneWhereFrom = true
+	if !esRemoto {
+		if whereFroms, err := plataforma.LeerWhereFroms(ctx, archivo.Ruta); err == nil && len(whereFroms) > 0 {
+			archivo.Metadatos.WhereFroms = whereFroms
+			archivo.Indicadores.TieneWhereFrom = true
+		}
 	}
 
 	if len(archivo.Metadatos.WhereFroms) > 0 {
@@ -752,6 +933,10 @@ func (s *Servicio) GenerarFotogramaVideo(ctx context.Context, ruta string, insta
 	if s.rutaFFmpeg == "" || s.rutaFFprobe == "" {
 		return nil, errors.New("ffmpeg/ffprobe no estan disponibles")
 	}
+	origen, err := s.resolverFuente(ctx, ruta)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo resolver la fuente del video: %w", err)
+	}
 	if maximo < 160 {
 		maximo = 160
 	}
@@ -764,7 +949,7 @@ func (s *Servicio) GenerarFotogramaVideo(ctx context.Context, ruta string, insta
 		"-hide_banner", "-loglevel", "error",
 		"-noautorotate",
 		"-ss", fmt.Sprintf("%.3f", instante.Seconds()),
-		"-i", ruta,
+		"-i", origen,
 		"-frames:v", "1",
 		"-vf", filtro,
 		"-f", "image2pipe",
@@ -787,6 +972,10 @@ func (s *Servicio) GenerarFotogramaVideo(ctx context.Context, ruta string, insta
 func (s *Servicio) GenerarLoteFotogramasVideo(ctx context.Context, ruta string, inicio time.Duration, fotogramasPorSegundo float64, cantidad, maximo int, rotacion int) ([]FotogramaVideo, error) {
 	if s.rutaFFmpeg == "" || s.rutaFFprobe == "" {
 		return nil, errors.New("ffmpeg/ffprobe no estan disponibles")
+	}
+	origen, err := s.resolverFuente(ctx, ruta)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo resolver la fuente del video: %w", err)
 	}
 	if fotogramasPorSegundo < 1 {
 		fotogramasPorSegundo = 12
@@ -811,9 +1000,9 @@ func (s *Servicio) GenerarLoteFotogramasVideo(ctx context.Context, ruta string, 
 	// Intentamos JPEG por rapidez; si ffmpeg rechaza ese encoder en un video concreto,
 	// hacemos un respaldo automático con PNG y recordamos el formato válido por ruta.
 	if s.formatoPreferidoLoteVideo(ruta) == "png" {
-		if fotogramas, err := s.extraerYLeerLoteFotogramas(ctx, ruta, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "png"); err == nil {
+		if fotogramas, err := s.extraerYLeerLoteFotogramas(ctx, origen, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "png"); err == nil {
 			return fotogramas, nil
-		} else if fotogramasJPEG, errJPEG := s.extraerYLeerLoteFotogramas(ctx, ruta, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "jpeg"); errJPEG == nil {
+		} else if fotogramasJPEG, errJPEG := s.extraerYLeerLoteFotogramas(ctx, origen, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "jpeg"); errJPEG == nil {
 			s.guardarFormatoPreferidoLoteVideo(ruta, "jpeg")
 			return fotogramasJPEG, nil
 		} else {
@@ -821,10 +1010,10 @@ func (s *Servicio) GenerarLoteFotogramasVideo(ctx context.Context, ruta string, 
 		}
 	}
 
-	if fotogramasJPEG, err := s.extraerYLeerLoteFotogramas(ctx, ruta, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "jpeg"); err == nil {
+	if fotogramasJPEG, err := s.extraerYLeerLoteFotogramas(ctx, origen, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "jpeg"); err == nil {
 		s.guardarFormatoPreferidoLoteVideo(ruta, "jpeg")
 		return fotogramasJPEG, nil
-	} else if fotogramasPNG, errPNG := s.extraerYLeerLoteFotogramas(ctx, ruta, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "png"); errPNG == nil {
+	} else if fotogramasPNG, errPNG := s.extraerYLeerLoteFotogramas(ctx, origen, inicio, filtro, cantidad, fotogramasPorSegundo, directorioTemporal, "png"); errPNG == nil {
 		s.guardarFormatoPreferidoLoteVideo(ruta, "png")
 		return fotogramasPNG, nil
 	} else {
@@ -1149,6 +1338,14 @@ func (s *Servicio) numeroFotogramaVideo(ctx context.Context, ruta string, instan
 }
 
 func (s *Servicio) fotogramasPorSegundoVideo(ctx context.Context, ruta string) (float64, error) {
+	origen, err := s.resolverFuente(ctx, ruta)
+	if err != nil {
+		return 0, fmt.Errorf("no se pudo resolver la fuente del video: %w", err)
+	}
+	return s.fotogramasPorSegundoVideoFuente(ctx, origen)
+}
+
+func (s *Servicio) fotogramasPorSegundoVideoFuente(ctx context.Context, ruta string) (float64, error) {
 	if s.rutaFFprobe == "" {
 		return 0, errors.New("ffprobe no esta disponible")
 	}
@@ -1207,6 +1404,14 @@ func parsearTasaFotogramas(texto string) (float64, error) {
 }
 
 func (s *Servicio) tienePistaAudioVideo(ctx context.Context, ruta string) (bool, error) {
+	origen, err := s.resolverFuente(ctx, ruta)
+	if err != nil {
+		return false, fmt.Errorf("no se pudo resolver la fuente del video: %w", err)
+	}
+	return s.tienePistaAudioVideoFuente(ctx, origen)
+}
+
+func (s *Servicio) tienePistaAudioVideoFuente(ctx context.Context, ruta string) (bool, error) {
 	if s.rutaFFprobe == "" {
 		return false, errors.New("ffprobe no esta disponible")
 	}
@@ -1244,18 +1449,99 @@ func (s *Servicio) obtenerContextoAudio() (*oto.Context, error) {
 	return s.audioContext, nil
 }
 
+// PausarAudioVideo conserva el buffer del audio para poder reanudarlo sin
+// volver a resolver la fuente ni iniciar otro proceso de ffmpeg.
+func (s *Servicio) PausarAudioVideo() {
+	if s == nil {
+		return
+	}
+	s.audioPlayerMutex.Lock()
+	player := s.audioPlayer
+	s.audioPlayerMutex.Unlock()
+	if player != nil {
+		player.Pause()
+	}
+}
+
+// ReanudarAudioVideo continúa el audio desde la posición conservada.
+func (s *Servicio) ReanudarAudioVideo() {
+	if s == nil {
+		return
+	}
+	s.audioPlayerMutex.Lock()
+	player := s.audioPlayer
+	s.audioPlayerMutex.Unlock()
+	if player != nil {
+		player.SetVolume(1)
+		player.Play()
+	}
+}
+
+// DetenerAudioVideo descarta los samples ya entregados a oto antes de cancelar
+// ffmpeg. Así no queda audio residual al terminar un video sin bucle.
+func (s *Servicio) DetenerAudioVideo() {
+	if s == nil {
+		return
+	}
+	s.audioPlayerMutex.Lock()
+	player := s.audioPlayer
+	s.audioPlayerMutex.Unlock()
+	if player != nil {
+		player.Reset()
+	}
+}
+
+func (s *Servicio) establecerAudioVideo(player *oto.Player) {
+	s.audioPlayerMutex.Lock()
+	s.audioPlayer = player
+	s.audioPlayerMutex.Unlock()
+}
+
+func (s *Servicio) limpiarAudioVideo(player *oto.Player) {
+	s.audioPlayerMutex.Lock()
+	if s.audioPlayer == player {
+		s.audioPlayer = nil
+	}
+	s.audioPlayerMutex.Unlock()
+}
+
 // ReproducirAudioVideo reproduce la pista de audio del video a partir de un instante.
 func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio time.Duration) error {
+	return s.reproducirAudioVideo(ctx, ruta, inicio, false, nil, true, false)
+}
+
+// ReproducirAudioVideoConAviso reproduce audio y avisa cuando oto ya tiene
+// samples disponibles para sincronizar el reloj visual del reproductor.
+func (s *Servicio) ReproducirAudioVideoConAviso(ctx context.Context, ruta string, inicio time.Duration, repetir bool, preparado func()) error {
+	// La UI ya enriqueció el video y solo llama a este método cuando
+	// TieneAudio es verdadero. Evitamos repetir ffprobe en cada play o seek,
+	// especialmente importante para fuentes remotas.
+	return s.reproducirAudioVideo(ctx, ruta, inicio, repetir, preparado, false, false)
+}
+
+// PrepararAudioVideoConAviso llena el buffer inicial sin emitir sonido. Permite
+// iniciar en paralelo la extracción de frames y liberar ambos al mismo tiempo.
+func (s *Servicio) PrepararAudioVideoConAviso(ctx context.Context, ruta string, inicio time.Duration, repetir bool, preparado func()) error {
+	return s.reproducirAudioVideo(ctx, ruta, inicio, repetir, preparado, false, true)
+}
+
+func (s *Servicio) reproducirAudioVideo(ctx context.Context, ruta string, inicio time.Duration, repetir bool, preparado func(), verificarPista, iniciarPausado bool) error {
 	if s.rutaFFmpeg == "" {
 		return errors.New("ffmpeg no esta disponible")
 	}
 
-	tieneAudio, err := s.tienePistaAudioVideo(ctx, ruta)
+	origen, err := s.resolverFuente(ctx, ruta)
 	if err != nil {
-		return err
+		return fmt.Errorf("no se pudo resolver la fuente del video para audio: %w", err)
 	}
-	if !tieneAudio {
-		return nil
+	if verificarPista {
+		tieneAudio, err := s.tienePistaAudioVideoFuente(ctx, origen)
+		if err != nil {
+			return err
+		}
+		if !tieneAudio {
+			return nil
+		}
 	}
 
 	contextoAudio, err := s.obtenerContextoAudio()
@@ -1263,11 +1549,15 @@ func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio
 		return fmt.Errorf("no se pudo inicializar la salida de audio: %w", err)
 	}
 
-	comando := exec.CommandContext(ctx, s.rutaFFmpeg,
+	argumentos := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-stream_loop", "-1",
+	}
+	if repetir {
+		argumentos = append(argumentos, "-stream_loop", "-1")
+	}
+	argumentos = append(argumentos,
 		"-ss", fmt.Sprintf("%.3f", inicio.Seconds()),
-		"-i", ruta,
+		"-i", origen,
 		"-map", "0:a:0?",
 		"-vn", "-sn", "-dn",
 		"-ac", "2",
@@ -1276,6 +1566,7 @@ func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio
 		"-f", "s16le",
 		"pipe:1",
 	)
+	comando := exec.CommandContext(ctx, s.rutaFFmpeg, argumentos...)
 	salida, err := comando.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("no se pudo preparar la salida de audio: %w", err)
@@ -1296,12 +1587,25 @@ func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio
 	}()
 
 	player := contextoAudio.NewPlayer(lector)
-	player.Play()
-	// Cancelar ffmpeg no vacía el buffer interno de oto. Reset lo pausa y
-	// descarta inmediatamente los samples restantes al pausar o buscar.
+	s.establecerAudioVideo(player)
+	defer s.limpiarAudioVideo(player)
 	defer player.Reset()
 	defer player.Close()
-
+	terminado := make(chan struct{})
+	defer close(terminado)
+	if iniciarPausado {
+		player.SetVolume(0)
+	}
+	player.Play()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if iniciarPausado {
+		player.Pause()
+	}
+	if preparado != nil {
+		go esperarAudioPreparado(ctx, player, terminado, preparado)
+	}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1332,6 +1636,25 @@ func (s *Servicio) ReproducirAudioVideo(ctx context.Context, ruta string, inicio
 	}
 
 	return nil
+}
+
+func esperarAudioPreparado(ctx context.Context, player *oto.Player, terminado <-chan struct{}, preparado func()) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-terminado:
+			return
+		case <-ticker.C:
+			if player.BufferedSize() > 0 {
+				preparado()
+				return
+			}
+		}
+	}
 }
 
 func numeroFotogramaAproximado(instante time.Duration, fotogramasPorSegundo float64) int {
@@ -1369,6 +1692,14 @@ func normalizarFormatoFrameSalida(formato string) string {
 }
 
 func (s *Servicio) duracionVideo(ctx context.Context, ruta string) (float64, error) {
+	origen, err := s.resolverFuente(ctx, ruta)
+	if err != nil {
+		return 0, fmt.Errorf("no se pudo resolver la fuente del video: %w", err)
+	}
+	return s.duracionVideoFuente(ctx, origen)
+}
+
+func (s *Servicio) duracionVideoFuente(ctx context.Context, ruta string) (float64, error) {
 	if s.rutaFFprobe == "" {
 		return 0, errors.New("ffprobe no esta disponible")
 	}

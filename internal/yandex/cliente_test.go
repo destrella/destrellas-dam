@@ -152,6 +152,14 @@ func TestClienteRESTDescargaContenidoRemoto(t *testing.T) {
 	}
 
 	lector, err := cliente.Descargar(context.Background(), "disk:/demo.txt")
+	href, err := cliente.URLDescarga(context.Background(), "disk:/demo.txt")
+	if err != nil {
+		t.Fatalf("URLDescarga devolvió error: %v", err)
+	}
+	if href != servidor.URL+"/contenido/demo" {
+		t.Fatalf("URL temporal inesperada: %q", href)
+	}
+
 	if err != nil {
 		t.Fatalf("Descargar devolvió error: %v", err)
 	}

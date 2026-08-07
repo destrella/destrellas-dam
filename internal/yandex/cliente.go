@@ -41,6 +41,7 @@ type Cliente interface {
 	ListarDirectorios(ctx context.Context, ruta string, limite, desplazamiento int) ([]ElementoRemoto, error)
 	ListarElementos(ctx context.Context, ruta string, limite, desplazamiento int) ([]ElementoRemoto, error)
 	Descargar(ctx context.Context, ruta string) (io.ReadCloser, error)
+	URLDescarga(ctx context.Context, ruta string) (string, error)
 	DescargarPreview(ctx context.Context, ruta, tamano string) (io.ReadCloser, error)
 	DescargarPreviewURL(ctx context.Context, href string) (io.ReadCloser, error)
 	Mover(ctx context.Context, origen, destino string) error
@@ -93,6 +94,11 @@ func (c *ClienteNulo) ListarElementos(_ context.Context, _ string, _ int, _ int)
 }
 
 // Descargar responde con un error explicito.
+// URLDescarga responde con un error explicito.
+func (c *ClienteNulo) URLDescarga(_ context.Context, _ string) (string, error) {
+	return "", ErrNoImplementado
+}
+
 func (c *ClienteNulo) Descargar(_ context.Context, _ string) (io.ReadCloser, error) {
 	return nil, ErrNoImplementado
 }
@@ -136,6 +142,15 @@ func (c *ClienteREST) ListarElementos(ctx context.Context, ruta string, limite, 
 
 // Descargar abre un flujo de lectura al contenido remoto solicitado.
 func (c *ClienteREST) Descargar(ctx context.Context, ruta string) (io.ReadCloser, error) {
+// URLDescarga obtiene la URL temporal que puede consumir ffmpeg directamente.
+// La URL no debe persistirse: Yandex puede hacerla expirar.
+func (c *ClienteREST) URLDescarga(ctx context.Context, ruta string) (string, error) {
+	if !c.Configurado() {
+		return "", ErrNoImplementado
+	}
+	return c.obtenerURLDescarga(ctx, ruta)
+}
+
 	if !c.Configurado() {
 		return nil, ErrNoImplementado
 	}

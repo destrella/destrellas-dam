@@ -30,6 +30,10 @@ func (c *clienteYandexPreviewPrueba) ListarElementos(context.Context, string, in
 }
 
 func (c *clienteYandexPreviewPrueba) Descargar(context.Context, string) (io.ReadCloser, error) {
+func (c *clienteYandexPreviewPrueba) URLDescarga(context.Context, string) (string, error) {
+	return "", yandex.ErrNoImplementado
+}
+
 	return nil, yandex.ErrNoImplementado
 }
 

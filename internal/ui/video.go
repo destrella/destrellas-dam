@@ -20,34 +20,43 @@ type fotogramaBufferVideo struct {
 	Imagen   image.Image
 }
 
+type loteCacheVideo struct {
+	Inicio     time.Duration
+	Maximo     int
+	Fotogramas []fotogramaBufferVideo
+}
+
 type estadoReproductorVideo struct {
-	Ruta                 string
-	Duracion             time.Duration
-	Rotacion             int
-	Posicion             time.Duration
-	Fotograma            image.Image
-	InstanteFotograma    time.Duration
-	MaximoFotograma      int
-	Fotogramas           []fotogramaBufferVideo
-	FotogramasInicioLoop []fotogramaBufferVideo
-	FotogramasPorSeg     float64
-	InicioBuffer         time.Duration
-	FinBuffer            time.Duration
-	Cargando             bool
-	MostrarCarga         bool
-	Reproduciendo        bool
-	UltimoTick           time.Time
-	Error                string
-	InstanteError        time.Duration
-	MaximoError          int
-	AudioError           string
-	InstantePendiente    time.Duration
-	MaximoPendiente      int
-	TienePendiente       bool
-	InicioLotePendiente  time.Duration
-	MaximoLotePendiente  int
-	TieneLotePendiente   bool
-	VersionSolicitud     int
+	Ruta                  string
+	Duracion              time.Duration
+	Rotacion              int
+	Posicion              time.Duration
+	Fotograma             image.Image
+	InstanteFotograma     time.Duration
+	MaximoFotograma       int
+	Fotogramas            []fotogramaBufferVideo
+	FotogramasInicioLoop  []fotogramaBufferVideo
+	LotesCache            []loteCacheVideo
+	FotogramasPorSeg      float64
+	InicioBuffer          time.Duration
+	FinBuffer             time.Duration
+	Cargando              bool
+	MostrarCarga          bool
+	Reproduciendo         bool
+	UltimoTick            time.Time
+	Error                 string
+	InstanteError         time.Duration
+	MaximoError           int
+	AudioError            string
+	MetadatosCargando     bool
+	ReproduccionPendiente bool
+	InstantePendiente     time.Duration
+	MaximoPendiente       int
+	TienePendiente        bool
+	InicioLotePendiente   time.Duration
+	MaximoLotePendiente   int
+	TieneLotePendiente    bool
+	VersionSolicitud      int
 }
 
 func (a *Aplicacion) limpiarReproductorVideo() {
@@ -60,9 +69,14 @@ func (a *Aplicacion) limpiarReproductorVideo() {
 
 func (a *Aplicacion) detenerReproduccionVideo() {
 	a.reproductorVideo.Reproduciendo = false
+	a.reproductorVideo.ReproduccionPendiente = false
 	a.reproductorVideo.UltimoTick = time.Time{}
 	a.reproductorVideo.MostrarCarga = false
-	a.detenerAudioVideo()
+	if a.audioVideoIniciado && !a.audioVideoListo {
+		a.detenerAudioVideo()
+	} else {
+		a.pausarAudioVideo()
+	}
 }
 
 func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
@@ -71,6 +85,9 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 			a.limpiarReproductorVideo()
 		}
 		return
+	}
+	if archivo.Origen == modelo.OrigenYandex && a.servicioMetadatos != nil {
+		a.servicioMetadatos.RegistrarTamanoFuenteVideo(archivo.Ruta, archivo.Tamano)
 	}
 
 	rotacion := modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
@@ -112,6 +129,7 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 		a.reproductorVideo.MaximoFotograma = 0
 		a.reproductorVideo.Fotogramas = nil
 		a.reproductorVideo.FotogramasInicioLoop = nil
+		a.reproductorVideo.LotesCache = nil
 		a.reproductorVideo.InicioBuffer = 0
 		a.reproductorVideo.FinBuffer = 0
 		a.reproductorVideo.Cargando = false
@@ -129,6 +147,7 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 		a.reproductorVideo.MaximoFotograma = 0
 		a.reproductorVideo.Fotogramas = nil
 		a.reproductorVideo.FotogramasInicioLoop = nil
+		a.reproductorVideo.LotesCache = nil
 		a.reproductorVideo.InicioBuffer = 0
 		a.reproductorVideo.FinBuffer = 0
 		a.reproductorVideo.Cargando = false
@@ -148,18 +167,46 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 		return
 	}
 
-	maximoBuffer := minimo(maximoFotograma, 960)
+	maximoBuffer := a.maximoFotogramaBuffer(maximoFotograma)
 	estado := &a.reproductorVideo
 	if estado.Reproduciendo {
+		if estado.MetadatosCargando {
+			estado.UltimoTick = gtx.Now
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+			return
+		}
+		if a.reproducirAudioVideo && a.audioVideoIniciado && !a.audioVideoListo {
+			estado.UltimoTick = gtx.Now
+			a.aplicarFotogramaDisponible(estado.Posicion)
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+			return
+		}
+		puedeIniciarAudio := !estado.Cargando || len(estado.Fotogramas) == 0 || estado.Posicion < estado.FinBuffer || a.bufferAlcanzaFinalVideo()
+		if a.reproducirAudioVideo && a.audioVideoIniciado && a.audioVideoListo && a.audioVideoPausado && puedeIniciarAudio && estado.Fotograma != nil && a.bufferCubreInstante(estado.Posicion) {
+			a.reanudarAudioVideo()
+			estado.UltimoTick = gtx.Now
+			a.aplicarFotogramaDisponible(estado.Posicion)
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+			return
+		}
+		if a.reproducirAudioVideo && a.audioVideoDisponible() && !a.audioVideoIniciado && puedeIniciarAudio && estado.Fotograma != nil && a.bufferCubreInstante(estado.Posicion) {
+			a.iniciarAudioVideo(estado.Posicion)
+			estado.UltimoTick = gtx.Now
+			a.aplicarFotogramaDisponible(estado.Posicion)
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+			return
+		}
 		if estado.UltimoTick.IsZero() {
 			estado.UltimoTick = gtx.Now
 		}
+		esperandoSiguienteLote := false
 		if delta := gtx.Now.Sub(estado.UltimoTick); delta > 0 {
 			posicionObjetivo := estado.Posicion + delta
 			// Si la precarga todavía no entrega el siguiente lote, mantenemos el reloj
 			// sobre el último fotograma disponible para evitar un salto brusco posterior.
 			if estado.Cargando && len(estado.Fotogramas) > 0 && posicionObjetivo > estado.FinBuffer && !a.bufferAlcanzaFinalVideo() {
 				posicionObjetivo = estado.FinBuffer
+				esperandoSiguienteLote = true
 			}
 			// Cuando todavía no existe ningún fotograma cargado para el tramo actual,
 			// detenemos el reloj para no "consumir" tiempo antes de poder mostrarlo.
@@ -176,6 +223,11 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 					estado.InstanteError = 0
 					estado.MaximoError = 0
 					estado.UltimoTick = gtx.Now
+					// ffmpeg repite el audio con su propia duración, que puede diferir
+					// algunos milisegundos de la pista de video. Reiniciarlo desde cero
+					// en cada ciclo evita que el desfase se acumule.
+					a.detenerAudioVideo()
+					a.prepararAudioVideo(estado.Posicion)
 					if !a.activarBufferInicioLoop() {
 						estado.Fotograma = nil
 						estado.InstanteFotograma = 0
@@ -193,6 +245,10 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 		// mostrando el frame inicial mientras la posición avanza "en silencio" y
 		// luego saltar bruscamente cuando ffmpeg termina de precargar.
 		if estado.Cargando && !a.bufferCubreInstante(estado.Posicion) && !a.posicionEnTramoFinalVideo(estado.Posicion) {
+			if a.audioVideoIniciado {
+				a.pausarAudioVideo()
+			}
+			estado.MostrarCarga = true
 			estado.UltimoTick = gtx.Now
 			a.aplicarFotogramaDisponible(estado.Posicion)
 			if !a.bufferCubreInstante(estado.Posicion) {
@@ -201,14 +257,28 @@ func (a *Aplicacion) actualizarReproductorVideo(gtx layout.Context, archivo mode
 			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
 			return
 		}
+		if esperandoSiguienteLote {
+			if a.audioVideoIniciado {
+				a.pausarAudioVideo()
+			}
+			estado.MostrarCarga = true
+			estado.UltimoTick = gtx.Now
+			a.aplicarFotogramaDisponible(estado.Posicion)
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second / 24)})
+			return
+		}
 
 		estado.UltimoTick = gtx.Now
 		a.aplicarFotogramaDisponible(estado.Posicion)
-		bufferDisponible := a.bufferCubreInstante(estado.Posicion)
+		bufferDisponible := a.bufferCubreInstante(estado.Posicion) && estado.Fotograma != nil
 		if bufferDisponible {
 			a.iniciarAudioVideo(estado.Posicion)
 		}
 		if !bufferDisponible {
+			if a.audioVideoIniciado {
+				a.pausarAudioVideo()
+			}
+			estado.MostrarCarga = true
 			a.solicitarLoteFotogramasVideo(archivo, estado.Posicion, maximoBuffer)
 		} else if a.debePrecargarSiguienteLote() {
 			a.solicitarLoteFotogramasVideo(archivo, a.inicioSiguienteLote(), maximoBuffer)
@@ -232,13 +302,19 @@ func (a *Aplicacion) alternarReproductorVideo() {
 	}
 
 	a.sincronizarReproductorVideo(a.archivoActivo)
-	if a.reproductorVideo.Duracion <= 0 {
-		a.establecerEstado("Esperando la duración real del video para reproducirlo", nil)
-		return
-	}
-
 	if a.reproductorVideo.Reproduciendo {
 		a.detenerReproduccionVideo()
+		return
+	}
+	if a.reproductorVideo.Duracion <= 0 {
+		if a.reproductorVideo.MetadatosCargando {
+			a.reproductorVideo.ReproduccionPendiente = true
+			a.reproductorVideo.Reproduciendo = true
+			a.reproductorVideo.Cargando = true
+			a.reproductorVideo.MostrarCarga = true
+			return
+		}
+		a.establecerEstado("Esperando la duración real del video para reproducirlo", nil)
 		return
 	}
 
@@ -246,14 +322,24 @@ func (a *Aplicacion) alternarReproductorVideo() {
 		a.prepararInicioReproductorVideo(false)
 	}
 
+	a.comenzarReproduccionVideo()
+}
+
+func (a *Aplicacion) comenzarReproduccionVideo() {
+	a.reproductorVideo.ReproduccionPendiente = false
 	a.invalidarSolicitudesFotogramasVideo()
 	a.reproductorVideo.Reproduciendo = true
 	a.reproductorVideo.UltimoTick = time.Time{}
 	a.reproductorVideo.MostrarCarga = true
 	if !a.bufferCubreInstante(a.reproductorVideo.Posicion) {
+		a.prepararAudioVideo(a.reproductorVideo.Posicion)
 		a.solicitarLoteFotogramasVideo(a.archivoActivo, a.reproductorVideo.Posicion, a.maximoFotogramaReproductor())
-	} else {
-		a.iniciarAudioVideo(a.reproductorVideo.Posicion)
+	} else if a.reproductorVideo.Fotograma != nil {
+		if a.audioVideoPausado {
+			a.reanudarAudioVideo()
+		} else {
+			a.iniciarAudioVideo(a.reproductorVideo.Posicion)
+		}
 	}
 }
 
@@ -302,6 +388,7 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeControl(maximoFotograma int) {
 	reproduciendoAntes := a.reproductorVideo.Reproduciendo
 	if reproduciendoAntes {
 		a.detenerReproduccionVideo()
+		a.detenerAudioVideo()
 	} else {
 		a.detenerAudioVideo()
 	}
@@ -320,8 +407,9 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeControl(maximoFotograma int) {
 		a.reproductorVideo.UltimoTick = time.Time{}
 		a.reproductorVideo.MostrarCarga = true
 		if !a.bufferCubreInstante(a.reproductorVideo.Posicion) {
+			a.prepararAudioVideo(a.reproductorVideo.Posicion)
 			a.solicitarLoteFotogramasVideo(a.archivoActivo, a.reproductorVideo.Posicion, maximoFotograma)
-		} else {
+		} else if a.reproductorVideo.Fotograma != nil {
 			a.iniciarAudioVideo(a.reproductorVideo.Posicion)
 		}
 		return
@@ -339,6 +427,7 @@ func (a *Aplicacion) actualizarPosicionVideoDesdeExtraccion(maximoFotograma int)
 	valorObjetivo := a.controlExtraccionFrame.Value
 	a.sincronizarReproductorVideo(a.archivoActivo)
 	a.detenerReproduccionVideo()
+	a.detenerAudioVideo()
 	a.invalidarSolicitudesFotogramasVideo()
 	a.reproductorVideo.Posicion = a.posicionDesdeProgresoVideo(valorObjetivo, a.reproductorVideo.Duracion)
 	a.descartarBufferFotogramas()
@@ -422,6 +511,7 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 	if a.reproductorVideo.Ruta != archivo.Ruta {
 		return
 	}
+	maximoFotograma = a.maximoFotogramaBuffer(maximoFotograma)
 
 	estado := &a.reproductorVideo
 	if estado.Cargando {
@@ -435,7 +525,7 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 		estado.FotogramasPorSeg = fotogramasPorSeg
 	}
 	inicio = a.normalizarInicioLoteVideo(inicio, estado.Duracion)
-	if a.bufferCubreInstante(inicio) && !a.debePrecargarSiguienteLote() {
+	if a.bufferCubreInstante(inicio) && !a.debePrecargarSiguienteLote() && !a.debeAnticiparSiguienteLote() {
 		return
 	}
 	if estado.Error != "" && diferenciaDuracion(estado.InstanteError, inicio) < a.intervaloFotogramasBuffer()*2 && estado.MaximoError >= maximoFotograma {
@@ -444,6 +534,10 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 
 	cantidad := a.cantidadFotogramasLoteBuffer()
 	esPrecargaInicioLoop := a.esPrecargaInicioLoop(inicio)
+	if lote, existe := a.buscarLoteCacheVideo(inicio, maximoFotograma); existe {
+		a.aplicarLoteCacheVideo(lote, inicio, maximoFotograma, esPrecargaInicioLoop)
+		return
+	}
 	estado.Cargando = true
 	estado.Error = ""
 	estado.VersionSolicitud++
@@ -466,13 +560,18 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 				a.reproductorVideo.MaximoError = maximoFotograma
 				if len(a.reproductorVideo.Fotogramas) == 0 {
 					a.reproductorVideo.Reproduciendo = false
+					a.detenerAudioVideo()
 				}
 				return
 			}
 
 			convertidos := convertirFotogramasVideo(lote)
+			if a.debeConservarLoteCacheVideo(archivo) {
+				a.guardarLoteCacheVideo(inicio, maximoFotograma, convertidos)
+			}
 			if esPrecargaInicioLoop {
 				a.reproductorVideo.FotogramasInicioLoop = convertidos
+				a.activarBufferInicioLoopPendiente()
 			} else {
 				a.integrarLoteFotogramas(lote)
 				if a.reproducirVideoEnLoop && inicio == 0 && len(a.reproductorVideo.FotogramasInicioLoop) == 0 {
@@ -484,6 +583,7 @@ func (a *Aplicacion) solicitarLoteFotogramasVideo(archivo modelo.Archivo, inicio
 			a.reproductorVideo.InstanteError = 0
 			a.reproductorVideo.MaximoError = 0
 			a.iniciarSolicitudLoteFotogramasVideoPendiente(archivo)
+			a.anticiparSiguienteLoteFotogramasVideo(archivo, maximoFotograma)
 		})
 	}()
 }
@@ -514,6 +614,10 @@ func (a *Aplicacion) iniciarSolicitudLoteFotogramasVideoPendiente(archivo modelo
 
 func (a *Aplicacion) integrarLoteFotogramas(nuevos []metadatos.FotogramaVideo) {
 	convertidos := convertirFotogramasVideo(nuevos)
+	a.integrarFotogramasBuffer(convertidos)
+}
+
+func (a *Aplicacion) integrarFotogramasBuffer(convertidos []fotogramaBufferVideo) {
 	if len(convertidos) == 0 {
 		return
 	}
@@ -530,6 +634,77 @@ func (a *Aplicacion) integrarLoteFotogramas(nuevos []metadatos.FotogramaVideo) {
 		estado.InicioBuffer = estado.Fotogramas[0].Instante
 		estado.FinBuffer = estado.Fotogramas[len(estado.Fotogramas)-1].Instante
 	}
+}
+
+func (a *Aplicacion) buscarLoteCacheVideo(inicio time.Duration, maximoFotograma int) ([]fotogramaBufferVideo, bool) {
+	for indice := len(a.reproductorVideo.LotesCache) - 1; indice >= 0; indice-- {
+		lote := a.reproductorVideo.LotesCache[indice]
+		if lote.Inicio == inicio && lote.Maximo >= maximoFotograma && len(lote.Fotogramas) > 0 {
+			return copiarFotogramasVideo(lote.Fotogramas), true
+		}
+	}
+	return nil, false
+}
+
+func (a *Aplicacion) guardarLoteCacheVideo(inicio time.Duration, maximoFotograma int, fotogramas []fotogramaBufferVideo) {
+	if len(fotogramas) == 0 {
+		return
+	}
+	cache := a.reproductorVideo.LotesCache
+	for indice := range cache {
+		if cache[indice].Inicio != inicio {
+			continue
+		}
+		if cache[indice].Maximo >= maximoFotograma {
+			return
+		}
+		cache[indice] = loteCacheVideo{
+			Inicio:     inicio,
+			Maximo:     maximoFotograma,
+			Fotogramas: copiarFotogramasVideo(fotogramas),
+		}
+		a.reproductorVideo.LotesCache = cache
+		return
+	}
+
+	cache = append(cache, loteCacheVideo{
+		Inicio:     inicio,
+		Maximo:     maximoFotograma,
+		Fotogramas: copiarFotogramasVideo(fotogramas),
+	})
+	const maximoLotesCache = 2
+	if len(cache) > maximoLotesCache {
+		cache = cache[len(cache)-maximoLotesCache:]
+	}
+	a.reproductorVideo.LotesCache = cache
+}
+
+func (a *Aplicacion) aplicarLoteCacheVideo(fotogramas []fotogramaBufferVideo, inicio time.Duration, maximoFotograma int, esPrecargaInicioLoop bool) {
+	a.reproductorVideo.Cargando = false
+	a.reproductorVideo.MostrarCarga = false
+	if esPrecargaInicioLoop {
+		a.reproductorVideo.FotogramasInicioLoop = copiarFotogramasVideo(fotogramas)
+		a.activarBufferInicioLoopPendiente()
+	} else {
+		a.integrarFotogramasBuffer(fotogramas)
+		if a.reproducirVideoEnLoop && inicio == 0 && len(a.reproductorVideo.FotogramasInicioLoop) == 0 {
+			a.reproductorVideo.FotogramasInicioLoop = copiarFotogramasVideo(fotogramas)
+		}
+		a.aplicarFotogramaDisponible(a.reproductorVideo.Posicion)
+	}
+	a.reproductorVideo.Error = ""
+	a.reproductorVideo.InstanteError = 0
+	a.reproductorVideo.MaximoError = 0
+	a.iniciarSolicitudLoteFotogramasVideoPendiente(a.archivoActivo)
+	a.anticiparSiguienteLoteFotogramasVideo(a.archivoActivo, maximoFotograma)
+}
+
+func (a *Aplicacion) anticiparSiguienteLoteFotogramasVideo(archivo modelo.Archivo, maximoFotograma int) {
+	estado := &a.reproductorVideo
+	if estado.Cargando || estado.TieneLotePendiente || !estado.Reproduciendo || !a.debeAnticiparSiguienteLote() {
+		return
+	}
+	a.solicitarLoteFotogramasVideo(archivo, a.inicioSiguienteLote(), maximoFotograma)
 }
 
 func convertirFotogramasVideo(nuevos []metadatos.FotogramaVideo) []fotogramaBufferVideo {
@@ -674,6 +849,19 @@ func (a *Aplicacion) debePrecargarSiguienteLote() bool {
 	return estado.FinBuffer-estado.Posicion <= a.margenPrecargaBuffer()
 }
 
+// debeAnticiparSiguienteLote evita la primera pausa del reproductor: al
+// recibir el lote visible pedimos inmediatamente un único lote consecutivo.
+func (a *Aplicacion) debeAnticiparSiguienteLote() bool {
+	estado := &a.reproductorVideo
+	if len(estado.Fotogramas) == 0 {
+		return false
+	}
+	if estado.Duracion > 0 && estado.FinBuffer >= estado.Duracion-a.margenFinalLoteVideo() {
+		return a.reproducirVideoEnLoop && estado.InicioBuffer > 0 && len(estado.FotogramasInicioLoop) == 0
+	}
+	return estado.FinBuffer-estado.Posicion <= a.duracionLoteBuffer()+a.intervaloFotogramasBuffer()
+}
+
 func (a *Aplicacion) inicioSiguienteLote() time.Duration {
 	estado := &a.reproductorVideo
 	if len(estado.Fotogramas) == 0 {
@@ -706,7 +894,13 @@ func (a *Aplicacion) cantidadFotogramasLoteBuffer() int {
 	if fps < 1 {
 		fps = 12
 	}
-	return maximoEntero(48, int(math.Ceil(fps*4)))
+	duracion := 4.0
+	if fps > 30 {
+		// Un bloque más largo absorbe la latencia de extracción de videos de
+		// 60 FPS sin tener que detener el reloj cada pocos segundos.
+		duracion = 6
+	}
+	return maximoEntero(48, int(math.Ceil(fps*duracion)))
 }
 
 func (a *Aplicacion) duracionLoteBuffer() time.Duration {
@@ -714,12 +908,12 @@ func (a *Aplicacion) duracionLoteBuffer() time.Duration {
 }
 
 func (a *Aplicacion) margenPrecargaBuffer() time.Duration {
-	margen := a.duracionLoteBuffer() / 2
-	if margen < 1500*time.Millisecond {
-		margen = 1500 * time.Millisecond
+	margen := a.duracionLoteBuffer() * 3 / 4
+	if margen < 2*time.Second {
+		margen = 2 * time.Second
 	}
-	if margen > 3*time.Second {
-		margen = 3 * time.Second
+	if margen > 4500*time.Millisecond {
+		margen = 4500 * time.Millisecond
 	}
 	return margen
 }
@@ -819,6 +1013,16 @@ func (a *Aplicacion) activarBufferInicioLoop() bool {
 	return true
 }
 
+// activarBufferInicioLoopPendiente cubre el caso en que el video ya llegó al
+// final antes de que termine la precarga del inicio del siguiente ciclo.
+func (a *Aplicacion) activarBufferInicioLoopPendiente() {
+	estado := &a.reproductorVideo
+	if !a.reproducirVideoEnLoop || !estado.Reproduciendo || a.bufferCubreInstante(estado.Posicion) {
+		return
+	}
+	_ = a.activarBufferInicioLoop()
+}
+
 func (a *Aplicacion) posicionEnTramoFinalVideo(posicion time.Duration) bool {
 	return a.reproductorVideo.Duracion > 0 && posicion >= a.reproductorVideo.Duracion-a.margenFinalLoteVideo()
 }
@@ -876,7 +1080,37 @@ func (a *Aplicacion) invalidarSolicitudesFotogramasVideo() {
 }
 
 func (a *Aplicacion) maximoFotogramaReproductor() int {
-	return maximo(960, a.reproductorVideo.MaximoFotograma)
+	return a.maximoFotogramaBuffer(maximo(960, a.reproductorVideo.MaximoFotograma))
+}
+
+// maximoFotogramaBuffer limita la memoria de buffers de alta tasa sin reducir
+// los FPS. Con 60 FPS, conservar dos lotes a 960 px puede requerir cientos de
+// MB y provocar pausas por recolección de memoria.
+func (a *Aplicacion) maximoFotogramaBuffer(maximoFotograma int) int {
+	maximoFotograma = minimo(maximoFotograma, 960)
+	fotogramasPorSeg := a.reproductorVideo.FotogramasPorSeg
+	if fotogramasPorSeg <= 30 {
+		return maximoFotograma
+	}
+	factorDuracion := float64(a.cantidadFotogramasLoteBuffer()) / (fotogramasPorSeg * 4)
+	ajuste := math.Sqrt(30 / (fotogramasPorSeg * factorDuracion))
+	ajustado := int(float64(maximoFotograma) * ajuste)
+	if ajustado < 480 && maximoFotograma >= 480 {
+		ajustado = 480
+	}
+	if ajustado > maximoFotograma {
+		return maximoFotograma
+	}
+	return ajustado
+}
+
+func (a *Aplicacion) debeConservarLoteCacheVideo(archivo modelo.Archivo) bool {
+	if a.reproductorVideo.FotogramasPorSeg > 30 {
+		// FotogramasInicioLoop conserva el arranque del siguiente ciclo; para
+		// videos de alta tasa no duplicamos además los lotes completos.
+		return false
+	}
+	return archivo.Origen == modelo.OrigenYandex || a.reproducirVideoEnLoop
 }
 
 func (a *Aplicacion) audioVideoDisponible() bool {
@@ -886,6 +1120,11 @@ func (a *Aplicacion) audioVideoDisponible() bool {
 func (a *Aplicacion) detenerAudioVideo() {
 	a.audioVideoVersion++
 	a.audioVideoIniciado = false
+	a.audioVideoListo = false
+	a.audioVideoPausado = false
+	if a.servicioMetadatos != nil {
+		a.servicioMetadatos.DetenerAudioVideo()
+	}
 	if a.audioVideoCancel != nil {
 		a.audioVideoCancel()
 		a.audioVideoCancel = nil
@@ -893,7 +1132,42 @@ func (a *Aplicacion) detenerAudioVideo() {
 	a.reproductorVideo.AudioError = ""
 }
 
+func (a *Aplicacion) pausarAudioVideo() {
+	if !a.audioVideoIniciado {
+		return
+	}
+	if !a.audioVideoListo {
+		a.detenerAudioVideo()
+		return
+	}
+	if a.audioVideoPausado {
+		return
+	}
+	if a.servicioMetadatos != nil {
+		a.servicioMetadatos.PausarAudioVideo()
+	}
+	a.audioVideoPausado = true
+}
+
+func (a *Aplicacion) reanudarAudioVideo() {
+	if !a.audioVideoIniciado || !a.audioVideoListo || !a.audioVideoPausado {
+		return
+	}
+	if a.servicioMetadatos != nil {
+		a.servicioMetadatos.ReanudarAudioVideo()
+	}
+	a.audioVideoPausado = false
+}
+
 func (a *Aplicacion) iniciarAudioVideo(instante time.Duration) {
+	a.iniciarAudioVideoConPausa(instante, false)
+}
+
+func (a *Aplicacion) prepararAudioVideo(instante time.Duration) {
+	a.iniciarAudioVideoConPausa(instante, true)
+}
+
+func (a *Aplicacion) iniciarAudioVideoConPausa(instante time.Duration, iniciarPausado bool) {
 	if a.audioVideoIniciado || !a.reproducirAudioVideo || a.servicioMetadatos == nil || !a.audioVideoDisponible() {
 		return
 	}
@@ -905,11 +1179,31 @@ func (a *Aplicacion) iniciarAudioVideo(instante time.Duration) {
 	ctx, cancelar := context.WithCancel(context.Background())
 	a.audioVideoCancel = cancelar
 	a.audioVideoIniciado = true
+	a.audioVideoListo = false
+	a.audioVideoPausado = iniciarPausado
 	version := a.audioVideoVersion
 	ruta := a.reproductorVideo.Ruta
+	repetir := a.reproducirVideoEnLoop
 
 	go func() {
-		err := a.servicioMetadatos.ReproducirAudioVideo(ctx, ruta, instante)
+		var err error
+		if iniciarPausado {
+			err = a.servicioMetadatos.PrepararAudioVideoConAviso(ctx, ruta, instante, repetir, func() {
+				a.encolarActualizacion(func() {
+					if a.reproductorVideo.Ruta == ruta && a.audioVideoVersion == version {
+						a.audioVideoListo = true
+					}
+				})
+			})
+		} else {
+			err = a.servicioMetadatos.ReproducirAudioVideoConAviso(ctx, ruta, instante, repetir, func() {
+				a.encolarActualizacion(func() {
+					if a.reproductorVideo.Ruta == ruta && a.audioVideoVersion == version {
+						a.audioVideoListo = true
+					}
+				})
+			})
+		}
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -919,6 +1213,8 @@ func (a *Aplicacion) iniciarAudioVideo(instante time.Duration) {
 				return
 			}
 			if err != nil {
+				a.audioVideoIniciado = false
+				a.audioVideoListo = true
 				a.reproductorVideo.AudioError = err.Error()
 			} else {
 				a.reproductorVideo.AudioError = ""
