@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,5 +80,30 @@ func TestFiltrarAsociacionesTextoBuscaEnElCampoSeleccionado(t *testing.T) {
 	filtradas = filtrarAsociacionesTexto(asociaciones, "vacaciones", filtroAsociacionTextoOriginales)
 	if len(filtradas) != 1 || filtradas[0].ID != 1 {
 		t.Fatalf("el filtro por originales no devolvió el grupo esperado: %+v", filtradas)
+	}
+}
+
+func TestLeerAsociacionesTextoCSVLeeJSONYEliminaDuplicados(t *testing.T) {
+	t.Parallel()
+
+	ruta := filepath.Join(t.TempDir(), "asociaciones.csv")
+	contenido := "\uFEFFID,\"Usuarios / alias (JSON)\",\"Nombres sugeridos (JSON)\"\n" +
+		"1,\"[\"\"Alias\"\",\"\"alias\"\"]\",\"[\"\"Nombre\"\",\"\"Nombre\"\"]\"\n"
+	if err := os.WriteFile(ruta, []byte(contenido), 0600); err != nil {
+		t.Fatalf("no se pudo crear el CSV de prueba: %v", err)
+	}
+
+	asociaciones, err := leerAsociacionesTextoCSV(ruta)
+	if err != nil {
+		t.Fatalf("no se pudo leer el CSV de prueba: %v", err)
+	}
+	if len(asociaciones) != 1 {
+		t.Fatalf("se esperaba una asociación, se obtuvieron %d", len(asociaciones))
+	}
+	if len(asociaciones[0].Originales) != 1 || asociaciones[0].Originales[0] != "Alias" {
+		t.Fatalf("originales inesperadas: %+v", asociaciones[0].Originales)
+	}
+	if len(asociaciones[0].Sugeridas) != 1 || asociaciones[0].Sugeridas[0] != "Nombre" {
+		t.Fatalf("sugeridas inesperadas: %+v", asociaciones[0].Sugeridas)
 	}
 }

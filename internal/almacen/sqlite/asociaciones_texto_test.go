@@ -36,6 +36,33 @@ func TestGuardarYListarAsociacionesTexto(t *testing.T) {
 	}
 }
 
+func TestGuardarAsociacionTextoNoDuplicaEntradaIdentica(t *testing.T) {
+	t.Parallel()
+
+	almacen := nuevoAlmacenPruebaAsociacionesTexto(t)
+	ctx := context.Background()
+
+	primera, err := almacen.GuardarAsociacionTexto(ctx, 0, []string{"alias"}, []string{"Nombre"})
+	if err != nil {
+		t.Fatalf("no se pudo guardar la primera asociación: %v", err)
+	}
+	segunda, err := almacen.GuardarAsociacionTexto(ctx, 0, []string{"alias"}, []string{"Nombre"})
+	if err != nil {
+		t.Fatalf("no se pudo guardar la asociación idéntica: %v", err)
+	}
+	if segunda.ID != primera.ID {
+		t.Fatalf("una asociación idéntica debería reutilizar el grupo: %d != %d", segunda.ID, primera.ID)
+	}
+
+	listado, err := almacen.ListarAsociacionesTexto(ctx, 100)
+	if err != nil {
+		t.Fatalf("no se pudieron listar las asociaciones: %v", err)
+	}
+	if len(listado) != 1 || len(listado[0].Originales) != 1 || len(listado[0].Sugeridas) != 1 {
+		t.Fatalf("la entrada idéntica no debería duplicar valores: %+v", listado)
+	}
+}
+
 func TestGuardarAsociacionTextoFusionaGruposCuandoReutilizaUnaCadenaOriginal(t *testing.T) {
 	t.Parallel()
 

@@ -387,6 +387,7 @@ type Aplicacion struct {
 	editorRelacionUbicacion    widget.Editor
 	editorAsociacionOriginales widget.Editor
 	editorAsociacionSugeridas  widget.Editor
+	editorRutaAsociacionesCSV  widget.Editor
 	editorComentario           widget.Editor
 	editorCopyright            widget.Editor
 	editorGPSLatitud           widget.Editor
@@ -462,11 +463,14 @@ type Aplicacion struct {
 	botonNuevaAsociacionTexto         widget.Clickable
 	botonGuardarAsociacionTexto       widget.Clickable
 	botonEliminarAsociacionTexto      widget.Clickable
+	botonSeleccionarAsociacionesCSV   widget.Clickable
+	botonImportarAsociacionesCSV      widget.Clickable
 	botonEscanearMetadatos            widget.Clickable
 	botonPausarEscaneo                widget.Clickable
 	botonGuardarRelacionUbicacion     widget.Clickable
 	botonQuitarRelacionUbicacion      widget.Clickable
 	botonGuardarConfig                widget.Clickable
+	importandoAsociacionesCSV         bool
 
 	botonAlternarVideo           widget.Clickable
 	botonReiniciarVideo          widget.Clickable
@@ -584,6 +588,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorRelacionUbicacion.SingleLine = true
 	appUI.editorAsociacionOriginales.SingleLine = true
 	appUI.editorAsociacionSugeridas.SingleLine = true
+	appUI.editorRutaAsociacionesCSV.SingleLine = true
 	appUI.formularioMetadatos.listaAtributoExtendido.Axis = layout.Vertical
 	appUI.formularioMetadatos.listaUbicacionesSugeridas.Axis = layout.Vertical
 	appUI.formularioMetadatos.listaSalidaExiftool.Axis = layout.Vertical
