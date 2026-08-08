@@ -1041,8 +1041,7 @@ func (a *Aplicacion) seleccionarEtiqueta(etiqueta string) {
 	if etiqueta == "" {
 		return
 	}
-	a.origenListado = origenListadoEtiqueta
-	a.claveListadoActual = etiqueta
+	a.establecerListadoFiltrado(origenListadoEtiqueta, etiqueta)
 	a.reiniciarListado()
 }
 
@@ -1051,15 +1050,27 @@ func (a *Aplicacion) seleccionarUbicacion(ubicacion string) {
 	if ubicacion == "" {
 		return
 	}
-	a.origenListado = origenListadoUbicacion
-	a.claveListadoActual = ubicacion
+	a.establecerListadoFiltrado(origenListadoUbicacion, ubicacion)
 	a.reiniciarListado()
 }
 
 func (a *Aplicacion) seleccionarUbicacionSinNombre() {
-	a.origenListado = origenListadoUbicacionSinNombre
-	a.claveListadoActual = ""
+	a.establecerListadoFiltrado(origenListadoUbicacionSinNombre, "")
 	a.reiniciarListado()
+}
+
+// establecerListadoFiltrado cambia el criterio lateral y descarta el detalle
+// si el usuario realmente selecciono otra etiqueta o ubicacion.
+func (a *Aplicacion) establecerListadoFiltrado(origen tipoOrigenListado, clave string) {
+	cambioListado := a.origenListado != origen || !strings.EqualFold(
+		strings.TrimSpace(a.claveListadoActual),
+		strings.TrimSpace(clave),
+	)
+	a.origenListado = origen
+	a.claveListadoActual = clave
+	if cambioListado {
+		a.descartarArchivoActivo()
+	}
 }
 
 func (a *Aplicacion) seleccionarNodoArbol(nodo *nodoArbolUI) {

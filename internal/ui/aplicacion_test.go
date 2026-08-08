@@ -33,6 +33,43 @@ func TestDrenarActualizacionesLimitaElTrabajoPorFrame(t *testing.T) {
 	}
 }
 
+func TestEstablecerListadoFiltradoDescartaDetalleAlCambiarEtiqueta(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		origenListado:      origenListadoEtiqueta,
+		claveListadoActual: "Una etiqueta",
+		tieneArchivoActivo: true,
+		archivoActivo:      modelo.Archivo{Ruta: "/tmp/activo.jpg"},
+	}
+
+	app.establecerListadoFiltrado(origenListadoEtiqueta, "Otra etiqueta")
+
+	if app.tieneArchivoActivo {
+		t.Fatal("el detalle debería limpiarse al cambiar de etiqueta")
+	}
+	if app.archivoActivo.Ruta != "" {
+		t.Fatalf("el archivo activo debería quedar vacío, se obtuvo %q", app.archivoActivo.Ruta)
+	}
+}
+
+func TestEstablecerListadoFiltradoConservaDetalleSiSeRepiteElMismoLugar(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		origenListado:      origenListadoUbicacion,
+		claveListadoActual: "Mérida",
+		tieneArchivoActivo: true,
+		archivoActivo:      modelo.Archivo{Ruta: "/tmp/activo.jpg"},
+	}
+
+	app.establecerListadoFiltrado(origenListadoUbicacion, " mérida ")
+
+	if !app.tieneArchivoActivo || app.archivoActivo.Ruta != "/tmp/activo.jpg" {
+		t.Fatal("repetir el mismo lugar no debería limpiar el detalle")
+	}
+}
+
 func TestRestaurarAnclaScrollListadoSigueLaRutaTrasEliminarElementoAnterior(t *testing.T) {
 	t.Parallel()
 
