@@ -79,6 +79,30 @@ func TestIndiceDestinoNavegacionExploradorGaleria(t *testing.T) {
 	}
 }
 
+func TestColumnasNavegacionExploradorUsaColumnasRenderizadas(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		filtros:               modelo.FiltrosListado{VistaGaleria: true},
+		columnasGaleriaActual: 6,
+	}
+
+	if columnas := app.columnasNavegacionExplorador(); columnas != 6 {
+		t.Fatalf("se esperaban las 6 columnas renderizadas, se obtuvieron %d", columnas)
+	}
+
+	app.columnasGaleriaActual = 0
+	if columnas := app.columnasNavegacionExplorador(); columnas != 1 {
+		t.Fatalf("el mínimo de columnas debería ser 1, se obtuvieron %d", columnas)
+	}
+
+	app.filtros.VistaGaleria = false
+	app.columnasGaleriaActual = 6
+	if columnas := app.columnasNavegacionExplorador(); columnas != 1 {
+		t.Fatalf("la vista lista debería usar una columna, se obtuvieron %d", columnas)
+	}
+}
+
 func TestFilasNavegacionExploradorRespetaGruposRecursivos(t *testing.T) {
 	t.Parallel()
 

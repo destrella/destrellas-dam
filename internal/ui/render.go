@@ -1922,10 +1922,7 @@ func (a *Aplicacion) procesarAtajosExplorador(gtx layout.Context) {
 		return
 	}
 
-	columnas := 1
-	if a.filtros.VistaGaleria {
-		columnas, _, _ = a.parametrosGaleria(gtx)
-	}
+	columnas := a.columnasNavegacionExplorador()
 	filas := a.filasNavegacionExplorador(columnas)
 	if len(filas) == 0 {
 		return
@@ -1962,6 +1959,16 @@ func (a *Aplicacion) procesarAtajosExplorador(gtx layout.Context) {
 		}
 		a.seleccionarIndiceExplorador(indiceDestino, filaVisualDestino)
 	}
+}
+
+// columnasNavegacionExplorador devuelve la misma cantidad de columnas que se
+// calculo al dibujar la galeria. Asi las flechas verticales conservan la
+// columna seleccionada aunque el panel tenga un ancho diferente al habitual.
+func (a *Aplicacion) columnasNavegacionExplorador() int {
+	if !a.filtros.VistaGaleria {
+		return 1
+	}
+	return maximo(1, a.columnasGaleriaActual)
 }
 
 type filaNavegacionExplorador struct {
