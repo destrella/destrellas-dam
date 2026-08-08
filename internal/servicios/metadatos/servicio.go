@@ -44,6 +44,8 @@ type DescargadorFuenteVideo func(context.Context, string) (io.ReadCloser, error)
 
 const limiteCacheFuenteVideo int64 = 64 << 20
 
+const calidadFrameDefecto float32 = 0.85
+
 // Servicio encapsula herramientas externas y analisis ligeros en Go.
 type Servicio struct {
 	rutaExiftool         string
@@ -577,10 +579,19 @@ func (s *Servicio) GuardarRegiones(ctx context.Context, archivo modelo.Archivo, 
 
 // ConvertirImagen genera un nuevo archivo en el formato solicitado.
 func (s *Servicio) ConvertirImagen(ctx context.Context, origen, formato, salida string) error {
+	return s.convertirImagenConCalidad(ctx, origen, formato, salida, -1)
+}
+
+func (s *Servicio) convertirImagenConCalidad(ctx context.Context, origen, formato, salida string, calidad float32) error {
 	if s.rutaMagick == "" {
 		return errors.New("ImageMagick no esta disponible")
 	}
-	comando := exec.CommandContext(ctx, s.rutaMagick, origen, salidaEnFormato(salida, formato))
+	argumentos := []string{origen}
+	if calidad >= 0 {
+		argumentos = append(argumentos, opcionesCalidadImagen(formato, calidad)...)
+	}
+	argumentos = append(argumentos, salidaEnFormato(salida, formato))
+	comando := exec.CommandContext(ctx, s.rutaMagick, argumentos...)
 	if salidaComando, err := comando.CombinedOutput(); err != nil {
 		return fmt.Errorf("no se pudo convertir la imagen: %w: %s", err, strings.TrimSpace(string(salidaComando)))
 	}
@@ -808,11 +819,18 @@ func (s *Servicio) ExtraerFrame(ctx context.Context, origen, selector, formato, 
 // ExtraerFrameEnInstante exporta un frame concreto del video, nombra el
 // archivo con su número aproximado y copia los metadatos editables del original.
 func (s *Servicio) ExtraerFrameEnInstante(ctx context.Context, origen string, instante time.Duration, formato string, rotacion int) (ResultadoExtraccionFrame, error) {
+	return s.ExtraerFrameEnInstanteConCalidad(ctx, origen, instante, formato, rotacion, calidadFrameDefecto)
+}
+
+// ExtraerFrameEnInstanteConCalidad exporta un frame y aplica la calidad
+// solicitada según el formato de salida.
+func (s *Servicio) ExtraerFrameEnInstanteConCalidad(ctx context.Context, origen string, instante time.Duration, formato string, rotacion int, calidad float32) (ResultadoExtraccionFrame, error) {
 	if s.rutaFFmpeg == "" {
 		return ResultadoExtraccionFrame{}, errors.New("ffmpeg no esta disponible")
 	}
 
 	formato = normalizarFormatoFrameSalida(formato)
+	calidad = normalizarCalidadFrame(calidad)
 	if instante < 0 {
 		instante = 0
 	}
@@ -827,7 +845,7 @@ func (s *Servicio) ExtraerFrameEnInstante(ctx context.Context, origen string, in
 		Numero:   numero,
 		Instante: instante,
 	}
-	if err := s.extraerFrameEnRutaConFormato(ctx, origen, instante, resultado.Ruta, rotacion, formato); err != nil {
+	if err := s.extraerFrameEnRutaConFormatoCalidad(ctx, origen, instante, resultado.Ruta, rotacion, formato, calidad); err != nil {
 		return resultado, err
 	}
 	if err := s.copiarMetadatosArchivoAFrame(ctx, origen, resultado.Ruta); err != nil {
@@ -1254,14 +1272,19 @@ func (s *Servicio) resolverSelectorFrame(ctx context.Context, ruta, selector str
 }
 
 func (s *Servicio) extraerFrameEnRutaConFormato(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int, formato string) error {
+	return s.extraerFrameEnRutaConFormatoCalidad(ctx, origen, instante, destino, rotacion, formato, calidadFrameDefecto)
+}
+
+func (s *Servicio) extraerFrameEnRutaConFormatoCalidad(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int, formato string, calidad float32) error {
 	formato = normalizarFormatoFrameSalida(formato)
+	calidad = normalizarCalidadFrame(calidad)
 	destino = salidaEnFormato(destino, formato)
 
 	if formato == "webp" && s.rutaMagick != "" {
-		return s.extraerFrameWebPConRespaldo(ctx, origen, instante, destino, rotacion)
+		return s.extraerFrameWebPConRespaldo(ctx, origen, instante, destino, rotacion, calidad)
 	}
 
-	if err := s.extraerFrameEnRuta(ctx, origen, instante, destino, rotacion); err != nil {
+	if err := s.extraerFrameEnRutaConCalidad(ctx, origen, instante, destino, rotacion, formato, calidad); err != nil {
 		if formato == "webp" && s.rutaMagick == "" {
 			return fmt.Errorf("%w. Este ffmpeg no parece incluir encoder WebP y tampoco hay ImageMagick disponible para usar un respaldo", err)
 		}
@@ -1270,7 +1293,7 @@ func (s *Servicio) extraerFrameEnRutaConFormato(ctx context.Context, origen stri
 	return nil
 }
 
-func (s *Servicio) extraerFrameWebPConRespaldo(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int) error {
+func (s *Servicio) extraerFrameWebPConRespaldo(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int, calidad float32) error {
 	directorioTemporal, err := os.MkdirTemp("", "destrellas-dam-frame-webp-*")
 	if err != nil {
 		return fmt.Errorf("no se pudo preparar el directorio temporal para WebP: %w", err)
@@ -1281,13 +1304,18 @@ func (s *Servicio) extraerFrameWebPConRespaldo(ctx context.Context, origen strin
 	if err := s.extraerFrameEnRuta(ctx, origen, instante, intermedioPNG, rotacion); err != nil {
 		return err
 	}
-	if err := s.ConvertirImagen(ctx, intermedioPNG, "webp", destino); err != nil {
+	if err := s.convertirImagenConCalidad(ctx, intermedioPNG, "webp", destino, calidad); err != nil {
 		return fmt.Errorf("no se pudo convertir el frame extraído a WebP: %w", err)
 	}
 	return nil
 }
 
 func (s *Servicio) extraerFrameEnRuta(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int) error {
+	return s.extraerFrameEnRutaConCalidad(ctx, origen, instante, destino, rotacion, "png", calidadFrameDefecto)
+}
+
+func (s *Servicio) extraerFrameEnRutaConCalidad(ctx context.Context, origen string, instante time.Duration, destino string, rotacion int, formato string, calidad float32) error {
+	calidad = normalizarCalidadFrame(calidad)
 	argumentos := []string{
 		"-hide_banner", "-loglevel", "error",
 		"-noautorotate",
@@ -1298,6 +1326,7 @@ func (s *Servicio) extraerFrameEnRuta(ctx context.Context, origen string, instan
 	if filtroRotacion := filtroRotacionVideo(rotacion); filtroRotacion != "" {
 		argumentos = append(argumentos, "-vf", filtroRotacion)
 	}
+	argumentos = append(argumentos, opcionesCalidadFrame(formato, calidad)...)
 	argumentos = append(argumentos, "-y", destino)
 
 	comando := exec.CommandContext(ctx, s.rutaFFmpeg, argumentos...)
@@ -1694,6 +1723,47 @@ func normalizarFormatoFrameSalida(formato string) string {
 		return "jpg"
 	default:
 		return "webp"
+	}
+}
+
+func normalizarCalidadFrame(valor float32) float32 {
+	if valor < 0 {
+		return 0
+	}
+	if valor > 1 {
+		return 1
+	}
+	return valor
+}
+
+func opcionesCalidadFrame(formato string, calidad float32) []string {
+	calidad = normalizarCalidadFrame(calidad)
+	switch normalizarFormatoFrameSalida(formato) {
+	case "jpg":
+		// El encoder MJPEG usa una escala inversa: 2 es la mejor calidad.
+		valor := 31 - int(math.Round(float64(calidad)*29))
+		return []string{"-q:v", strconv.Itoa(valor)}
+	case "webp":
+		return []string{"-q:v", strconv.Itoa(int(math.Round(float64(calidad) * 100)))}
+	case "png":
+		// PNG siempre es sin pérdida; el slider controla el nivel de compresión.
+		nivelCompresion := int(math.Round(float64(1-calidad) * 9))
+		return []string{"-compression_level", strconv.Itoa(nivelCompresion)}
+	default:
+		return nil
+	}
+}
+
+func opcionesCalidadImagen(formato string, calidad float32) []string {
+	calidad = normalizarCalidadFrame(calidad)
+	switch normalizarFormatoFrameSalida(formato) {
+	case "jpg", "webp":
+		return []string{"-quality", strconv.Itoa(int(math.Round(float64(calidad) * 100)))}
+	case "png":
+		nivelCompresion := int(math.Round(float64(1-calidad) * 9))
+		return []string{"-define", "png:compression-level=" + strconv.Itoa(nivelCompresion)}
+	default:
+		return nil
 	}
 }
 

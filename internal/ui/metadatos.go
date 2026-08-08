@@ -983,13 +983,27 @@ func (a *Aplicacion) dibujarBloqueExtraerFrame(gtx layout.Context) layout.Dimens
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.dibujarSelectorFormatoExtraccion(gtx)
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarSelectorFormatoExtraccion(gtx)
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return a.dibujarControlCalidadExtraccion(gtx)
+						}),
+					)
 				}),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return a.dibujarBotonAccion(gtx, &a.botonExtraerFrame, "Extraer frame", a.paleta.Acento, a.paleta.TextoSobreAcento, func() {
 						a.extraerFrameActivo()
 					})
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if strings.TrimSpace(a.notificacionExtraccionFrame) == "" {
+						return layout.Dimensions{}
+					}
+					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, a.dibujarNotificacionExtraccionFrame)
 				}),
 			)
 		})
@@ -999,6 +1013,68 @@ func (a *Aplicacion) dibujarBloqueExtraerFrame(gtx layout.Context) layout.Dimens
 		a.actualizarPosicionVideoDesdeExtraccion(maximoFotograma)
 	}
 	return dim
+}
+
+func (a *Aplicacion) dibujarNotificacionExtraccionFrame(gtx layout.Context) layout.Dimensions {
+	fondo := a.paleta.Exito
+	if a.extraccionFrameEnCurso {
+		fondo = a.paleta.AcentoSuave
+	}
+	if a.extraccionFrameTieneError {
+		fondo = a.paleta.Peligro
+	}
+
+	etiqueta := "Éxito: "
+	if a.extraccionFrameEnCurso {
+		etiqueta = "Procesando: "
+	}
+	if a.extraccionFrameTieneError {
+		etiqueta = "Error: "
+	}
+
+	return dibujarPanel(gtx, fondo, unit.Dp(10), func(gtx layout.Context) layout.Dimensions {
+		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					estilo := material.Label(a.tema, unit.Sp(14), etiqueta+a.notificacionExtraccionFrame)
+					estilo.Color = a.paleta.Texto
+					return estilo.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if strings.TrimSpace(a.detalleExtraccionFrame) == "" {
+						return layout.Dimensions{}
+					}
+					estilo := material.Label(a.tema, unit.Sp(12), a.detalleExtraccionFrame)
+					estilo.Color = a.paleta.Texto
+					return estilo.Layout(gtx)
+				}),
+			)
+		})
+	})
+}
+
+func (a *Aplicacion) dibujarControlCalidadExtraccion(gtx layout.Context) layout.Dimensions {
+	calidad := a.calidadExtraccionFrameNormalizada()
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.dibujarTextoSecundario(gtx, "Calidad del archivo")
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					deslizador := material.Slider(a.tema, &a.controlCalidadExtraccionFrame)
+					deslizador.Axis = layout.Horizontal
+					deslizador.Color = a.paleta.Acento
+					return deslizador.Layout(gtx)
+				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return a.dibujarTextoPrincipal(gtx, fmt.Sprintf("%.0f%%", float64(calidad)*100))
+				}),
+			)
+		}),
+	)
 }
 
 func (a *Aplicacion) descripcionExtraccionFrame() string {
@@ -1072,6 +1148,17 @@ func (a *Aplicacion) formatoExtraccionFrameNormalizado() string {
 	default:
 		return "webp"
 	}
+}
+
+func (a *Aplicacion) calidadExtraccionFrameNormalizada() float32 {
+	valor := a.controlCalidadExtraccionFrame.Value
+	if valor < 0 {
+		return 0
+	}
+	if valor > 1 {
+		return 1
+	}
+	return valor
 }
 
 func etiquetaFormatoExtraccion(formato string) string {

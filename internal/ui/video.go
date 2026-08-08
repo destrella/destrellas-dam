@@ -67,6 +67,10 @@ func (a *Aplicacion) limpiarReproductorVideo() {
 	a.controlProgresoVideo = widget.Float{}
 	a.controlExtraccionFrame = widget.Float{}
 	a.formatoExtraccionExpandido = false
+	a.notificacionExtraccionFrame = ""
+	a.detalleExtraccionFrame = ""
+	a.extraccionFrameEnCurso = false
+	a.extraccionFrameTieneError = false
 }
 
 func (a *Aplicacion) detenerReproduccionVideo() {
@@ -95,6 +99,10 @@ func (a *Aplicacion) sincronizarReproductorVideo(archivo modelo.Archivo) {
 	rotacion := modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
 	if a.reproductorVideo.Ruta != archivo.Ruta {
 		a.detenerAudioVideo()
+		a.notificacionExtraccionFrame = ""
+		a.detalleExtraccionFrame = ""
+		a.extraccionFrameEnCurso = false
+		a.extraccionFrameTieneError = false
 		fotogramasPorSeg := archivo.FotogramasPorSegundo
 		if fotogramasPorSeg < 1 {
 			fotogramasPorSeg = 12

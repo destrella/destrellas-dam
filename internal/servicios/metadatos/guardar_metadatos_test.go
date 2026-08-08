@@ -152,6 +152,31 @@ func TestConstruirRutaSalidaFrameIncluyeNumeroYFormato(t *testing.T) {
 	}
 }
 
+func TestOpcionesCalidadFrameUsaLaEscalaDelFormato(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		formato  string
+		calidad  float32
+		esperado string
+	}{
+		{formato: "jpg", calidad: 1, esperado: "-q:v 2"},
+		{formato: "webp", calidad: 0.75, esperado: "-q:v 75"},
+		{formato: "png", calidad: 0, esperado: "-compression_level 9"},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.formato, func(t *testing.T) {
+			opciones := opcionesCalidadFrame(caso.formato, caso.calidad)
+			obtenido := strings.Join(opciones, " ")
+			if obtenido != caso.esperado {
+				t.Fatalf("opciones inesperadas para %s: %q; se esperaba %q", caso.formato, obtenido, caso.esperado)
+			}
+		})
+	}
+}
+
 func TestParsearTasaFotogramas(t *testing.T) {
 	t.Parallel()
 

@@ -411,8 +411,13 @@ type Aplicacion struct {
 	editorFormatoImagen            widget.Editor
 	sobreescribirVideo             widget.Bool
 	controlExtraccionFrame         widget.Float
+	controlCalidadExtraccionFrame  widget.Float
 	formatoExtraccionFrame         string
 	formatoExtraccionExpandido     bool
+	notificacionExtraccionFrame    string
+	detalleExtraccionFrame         string
+	extraccionFrameEnCurso         bool
+	extraccionFrameTieneError      bool
 	botonSelectorFormatoExtraccion widget.Clickable
 	opcionesFormatoExtraccion      map[string]*widget.Clickable
 
@@ -571,6 +576,7 @@ func NuevaAplicacion(dependencias Dependencias) *Aplicacion {
 	appUI.editorFormatoImagen.SetText("webp")
 	appUI.reemplazarOriginalRecorte.Value = true
 	appUI.formatoExtraccionFrame = "webp"
+	appUI.controlCalidadExtraccionFrame.Value = 0.85
 	appUI.editorFiltroEtiquetas.SingleLine = true
 	appUI.editorFiltroLugares.SingleLine = true
 	appUI.editorFiltroAsociaciones.SingleLine = true
@@ -3462,23 +3468,41 @@ func (a *Aplicacion) extraerFrameActivo() {
 	a.sincronizarReproductorVideo(a.archivoActivo)
 	archivo := a.archivoActivo
 	formato := a.formatoExtraccionFrameNormalizado()
+	calidad := a.calidadExtraccionFrameNormalizada()
 	instante := a.instanteExtraerFrameActivo()
 	rotacion := modelo.NormalizarRotacionCuartos(archivo.Metadatos.Rotacion)
+	a.notificacionExtraccionFrame = "Extrayendo el frame seleccionado..."
+	a.detalleExtraccionFrame = "Espera mientras se genera el archivo y se copian sus metadatos."
+	a.extraccionFrameEnCurso = true
+	a.extraccionFrameTieneError = false
 
 	go func() {
-		resultado, err := a.servicioMetadatos.ExtraerFrameEnInstante(context.Background(), archivo.Ruta, instante, formato, rotacion)
+		resultado, err := a.servicioMetadatos.ExtraerFrameEnInstanteConCalidad(context.Background(), archivo.Ruta, instante, formato, rotacion, calidad)
 		a.encolarActualizacion(func() {
+			if !a.tieneArchivoActivo || a.archivoActivo.Ruta != archivo.Ruta {
+				return
+			}
+			a.extraccionFrameEnCurso = false
 			if err != nil {
 				if strings.TrimSpace(resultado.Ruta) != "" {
 					if _, errStat := os.Stat(resultado.Ruta); errStat == nil {
+						a.notificacionExtraccionFrame = "Frame creado con incidencias al copiar metadatos"
+						a.detalleExtraccionFrame = err.Error()
+						a.extraccionFrameTieneError = true
 						a.establecerEstado("Frame extraído con incidencias al copiar metadatos", err)
 						a.reiniciarListado()
 						return
 					}
 				}
+				a.notificacionExtraccionFrame = "No se pudo extraer el frame"
+				a.detalleExtraccionFrame = err.Error()
+				a.extraccionFrameTieneError = true
 				a.establecerEstado("No se pudo extraer el frame del video", err)
 				return
 			}
+			a.notificacionExtraccionFrame = fmt.Sprintf("Frame %d extraído correctamente", resultado.Numero)
+			a.detalleExtraccionFrame = "Archivo: " + filepath.Base(resultado.Ruta)
+			a.extraccionFrameTieneError = false
 			a.establecerEstado(fmt.Sprintf("Frame %d extraído correctamente", resultado.Numero), nil)
 			a.reiniciarListado()
 		})
