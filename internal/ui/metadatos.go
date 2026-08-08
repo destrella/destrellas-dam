@@ -75,7 +75,10 @@ type diaCalendarioUI struct {
 var (
 	expresionFechaHoraNombre = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(\d{4})(\d{2})(\d{2})[ _-]?(\d{2})(\d{2})(\d{2})(z|[+-]\d{2}:?\d{2})?`),
-		regexp.MustCompile(`(?i)(\d{4})[-_](\d{2})[-_](\d{2})[ t_-](\d{2})[._-](\d{2})[._-](\d{2})(?:[._-]\d{1,9})?(z|[+-]\d{2}:?\d{2})?`),
+		// En nombres con separadores, el guion posterior a los segundos puede
+		// iniciar un offset compacto como -0600; por eso los milisegundos
+		// opcionales se limitan a separadores de punto o guion bajo.
+		regexp.MustCompile(`(?i)(\d{4})[-_](\d{2})[-_](\d{2})[ t_-](\d{2})[._-](\d{2})[._-](\d{2})(?:[._]\d{1,9})?(z|[+-]\d{2}:?\d{2})?`),
 		regexp.MustCompile(`(?i)screenshot[ _-]?(\d{4})[-_](\d{2})[-_](\d{2})[ _-]at[ _-](\d{2})[._-](\d{2})[._-](\d{2})`),
 	}
 	expresionZonaHorariaEditable = regexp.MustCompile(`^(?i:z|[+-]\d{1,2}:?\d{2})$`)

@@ -57,6 +57,24 @@ func TestInferirFechaHoraDesdeNombreReconoceMilisegundosYZonaUTC(t *testing.T) {
 	}
 }
 
+func TestInferirFechaHoraDesdeNombreReconoceOffsetCompacto(t *testing.T) {
+	t.Parallel()
+
+	fecha, hora, zona, ok := inferirFechaHoraDesdeNombre("2026-08-03T16-09-00-0600")
+	if !ok {
+		t.Fatal("se esperaba inferir fecha, hora y zona desde el nombre")
+	}
+	if fecha != "2026-08-03" {
+		t.Fatalf("fecha inesperada: %q", fecha)
+	}
+	if hora != "16:09:00" {
+		t.Fatalf("hora inesperada: %q", hora)
+	}
+	if zona != "-06:00" {
+		t.Fatalf("zona inesperada: %q", zona)
+	}
+}
+
 func TestArchivoTieneFechaYHoraArchivables(t *testing.T) {
 	t.Parallel()
 
