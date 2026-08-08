@@ -137,7 +137,7 @@ func TestFusionarOpcionesLateralesIncluyeExtrasSinDuplicados(t *testing.T) {
 		[]string{"Nueva etiqueta", "familia", "  Nuevo lugar  "},
 	)
 
-	esperadas := []string{"Nueva etiqueta", "Nuevo lugar", "Familia", "Viaje", "Cancún"}
+	esperadas := []string{"Cancún", "Familia", "Nueva etiqueta", "Nuevo lugar", "Viaje"}
 	if len(opciones) != len(esperadas) {
 		t.Fatalf("cantidad inesperada de opciones: %d", len(opciones))
 	}

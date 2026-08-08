@@ -1680,6 +1680,7 @@ func (a *Aplicacion) recargarColeccionesLateralesConExtras(etiquetasExtra, ubica
 					Clave:    etiquetaUbicacionSinNombre,
 					Etiqueta: etiquetaUbicacionSinNombre,
 				})
+				a.ubicacionesNombradas = ordenarOpcionesLaterales(a.ubicacionesNombradas)
 			}
 			if errEtiquetas != nil {
 				a.establecerEstado("No se pudieron cargar las etiquetas", errEtiquetas)
@@ -1817,7 +1818,9 @@ func anexarUbicacionSinNombreCoincidente(opciones, base []opcionFiltroLateral, c
 	}
 	for _, opcion := range base {
 		if opcion.Clave == etiquetaUbicacionSinNombre {
-			return append(opciones, opcion)
+			resultado := append([]opcionFiltroLateral(nil), opciones...)
+			resultado = append(resultado, opcion)
+			return ordenarOpcionesLaterales(resultado)
 		}
 	}
 	return opciones
@@ -3983,7 +3986,7 @@ func convertirOpcionesLaterales(valores []string) []opcionFiltroLateral {
 			Etiqueta: valor,
 		})
 	}
-	return opciones
+	return ordenarOpcionesLaterales(opciones)
 }
 
 func fusionarOpcionesLaterales(valores, extras []string) []opcionFiltroLateral {
@@ -4034,6 +4037,13 @@ func fusionarOpcionesLaterales(valores, extras []string) []opcionFiltroLateral {
 			Etiqueta: valor,
 		})
 	}
+	return ordenarOpcionesLaterales(opciones)
+}
+
+func ordenarOpcionesLaterales(opciones []opcionFiltroLateral) []opcionFiltroLateral {
+	sort.SliceStable(opciones, func(i, j int) bool {
+		return compararTextoUI(opciones[i].Etiqueta, opciones[j].Etiqueta)
+	})
 	return opciones
 }
 
