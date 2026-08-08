@@ -28,6 +28,7 @@ import (
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
+	"golang.org/x/text/unicode/norm"
 
 	"destrellas-dam/internal/modelo"
 	"destrellas-dam/internal/plataforma"
@@ -2443,7 +2444,7 @@ func normalizarLista(entrada []string) []string {
 	vistos := make(map[string]struct{}, len(entrada))
 	var salida []string
 	for _, item := range entrada {
-		item = strings.TrimSpace(item)
+		item = norm.NFC.String(strings.TrimSpace(item))
 		if item == "" {
 			continue
 		}

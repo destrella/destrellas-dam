@@ -28,6 +28,25 @@ func TestNormalizarFechaHoraEditadaAceptaFormatosCompatibles(t *testing.T) {
 	}
 }
 
+func TestPartirListaCSVNormalizaYDeduplicaFormasUnicode(t *testing.T) {
+	t.Parallel()
+
+	precompuesta := "Yunet Ivenchi D\u00edaz Padr\u00f3n"
+	combinada := "Yunet Ivenchi Di\u0301az Padro\u0301n"
+
+	resultado := partirListaCSV(combinada + ", " + precompuesta + ", selfie, SELFIE")
+
+	if len(resultado) != 2 {
+		t.Fatalf("se esperaban 2 etiquetas únicas, se obtuvieron %d: %#v", len(resultado), resultado)
+	}
+	if resultado[0] != precompuesta {
+		t.Fatalf("la etiqueta no quedó en forma NFC: %q", resultado[0])
+	}
+	if resultado[1] != "selfie" {
+		t.Fatalf("la etiqueta selfie no se conservó como se esperaba: %q", resultado[1])
+	}
+}
+
 func TestNormalizarFechaHoraEditadaRechazaZonaInvalida(t *testing.T) {
 	t.Parallel()
 

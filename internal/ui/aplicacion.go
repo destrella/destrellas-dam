@@ -21,6 +21,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/image/draw"
+	"golang.org/x/text/unicode/norm"
 
 	"destrellas-dam/internal/almacen"
 	"destrellas-dam/internal/configuracion"
@@ -3811,7 +3812,7 @@ func partirListaCSV(texto string) []string {
 	vistos := make(map[string]struct{}, len(partes))
 	var salida []string
 	for _, parte := range partes {
-		parte = strings.TrimSpace(parte)
+		parte = normalizarTextoUnicode(strings.TrimSpace(parte))
 		if parte == "" {
 			continue
 		}
@@ -3823,6 +3824,12 @@ func partirListaCSV(texto string) []string {
 		salida = append(salida, parte)
 	}
 	return salida
+}
+
+// normalizarTextoUnicode usa NFC para que las letras acentuadas precompuestas
+// y sus equivalentes con acento combinable se comparen como el mismo texto.
+func normalizarTextoUnicode(texto string) string {
+	return norm.NFC.String(texto)
 }
 
 func formatearTamano(tamano int64) string {

@@ -121,6 +121,25 @@ func TestGuardarMetadatosReemplazaPalabrasClaveYSujetosPrevios(t *testing.T) {
 	}
 }
 
+func TestNormalizarListaUnificaFormasUnicodeDeUnaEtiqueta(t *testing.T) {
+	t.Parallel()
+
+	precompuesta := "Yunet Ivenchi D\u00edaz Padr\u00f3n"
+	combinada := "Yunet Ivenchi Di\u0301az Padro\u0301n"
+
+	resultado := normalizarLista([]string{combinada, precompuesta, "SELFIE", "selfie"})
+
+	if len(resultado) != 2 {
+		t.Fatalf("se esperaban 2 etiquetas únicas, se obtuvieron %d: %#v", len(resultado), resultado)
+	}
+	if resultado[0] != precompuesta {
+		t.Fatalf("la primera etiqueta no quedó normalizada como se esperaba: %q", resultado[0])
+	}
+	if resultado[1] != "SELFIE" {
+		t.Fatalf("la comparación sin distinguir mayúsculas cambió inesperadamente: %q", resultado[1])
+	}
+}
+
 func crearJPEGPrueba(t *testing.T, ruta string) {
 	t.Helper()
 

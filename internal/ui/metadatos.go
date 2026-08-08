@@ -750,7 +750,7 @@ func normalizarListaCSV(valores []string) []string {
 	vistos := make(map[string]struct{}, len(valores))
 	var salida []string
 	for _, valor := range valores {
-		valor = strings.TrimSpace(valor)
+		valor = normalizarTextoUnicode(strings.TrimSpace(valor))
 		if valor == "" {
 			continue
 		}
