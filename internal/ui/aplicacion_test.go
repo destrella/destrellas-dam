@@ -104,6 +104,31 @@ func TestRestaurarAnclaScrollListadoSigueLaRutaTrasEliminarElementoAnterior(t *t
 	}
 }
 
+func TestRetirarArchivoInactivoDelListadoPorEtiqueta(t *testing.T) {
+	t.Parallel()
+
+	app := &Aplicacion{
+		origenListado:      origenListadoEtiqueta,
+		claveListadoActual: "Familia",
+		elementos: []modelo.Archivo{
+			{Ruta: "/tmp/activo.jpg", Metadatos: modelo.MetadatosArchivo{Sujetos: []string{"Familia"}}},
+			{Ruta: "/tmp/otro.jpg", Metadatos: modelo.MetadatosArchivo{Sujetos: []string{"Familia"}}},
+		},
+		listaCentro: widget.List{},
+	}
+
+	archivoActualizado := modelo.Archivo{
+		Ruta:      "/tmp/activo.jpg",
+		Metadatos: modelo.MetadatosArchivo{Sujetos: []string{"Viaje"}},
+	}
+	if !app.retirarArchivoInactivoDelListado(archivoActualizado) {
+		t.Fatal("se esperaba retirar el archivo que dejó de coincidir con la etiqueta")
+	}
+	if len(app.elementos) != 1 || app.elementos[0].Ruta != "/tmp/otro.jpg" {
+		t.Fatalf("el listado no quedó depurado: %+v", app.elementos)
+	}
+}
+
 func TestRestaurarAnclaScrollGaleriaConservaLaFilaDelArchivo(t *testing.T) {
 	t.Parallel()
 

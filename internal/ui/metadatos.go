@@ -296,6 +296,10 @@ func (a *Aplicacion) guardarMetadatosArchivoActivo() {
 			a.sincronizarEditoresMetadatos(archivo)
 			a.solicitarSalidaExiftool(archivo, true)
 			a.reemplazarArchivoEnMemoria(archivo)
+			if errExif == nil && errBD == nil && a.retirarArchivoInactivoDelListado(archivo) {
+				a.descartarArchivoActivo()
+				a.solicitarSalidaExiftool(modelo.Archivo{}, true)
+			}
 			a.recargarColeccionesLateralesConExtras(palabras, []string{archivo.Metadatos.Ubicacion})
 		})
 	}()

@@ -2518,6 +2518,72 @@ func (a *Aplicacion) reemplazarArchivoEnMemoria(archivo modelo.Archivo) {
 	}
 }
 
+func (a *Aplicacion) archivoCoincideListadoActual(archivo modelo.Archivo) bool {
+	switch a.origenListado {
+	case origenListadoEtiqueta:
+		etiquetaBuscada := normalizarClaveListado(a.claveListadoActual)
+		for _, etiqueta := range append(append([]string(nil), archivo.Metadatos.Sujetos...), archivo.Metadatos.PalabrasClave...) {
+			if normalizarClaveListado(etiqueta) == etiquetaBuscada {
+				return true
+			}
+		}
+		return false
+	case origenListadoUbicacion:
+		return normalizarClaveListado(archivo.Metadatos.Ubicacion) == normalizarClaveListado(a.claveListadoActual)
+	case origenListadoUbicacionSinNombre:
+		return archivo.Metadatos.Coordenadas == nil || strings.TrimSpace(archivo.Metadatos.Ubicacion) != ""
+	default:
+		return true
+	}
+}
+
+func normalizarClaveListado(valor string) string {
+	return strings.ToLower(normalizarTextoUnicode(strings.TrimSpace(valor)))
+}
+
+// retirarArchivoInactivoDelListado quita un archivo que dejó de coincidir con
+// el filtro lateral actual sin reiniciar toda la página ni su posición.
+func (a *Aplicacion) retirarArchivoInactivoDelListado(archivo modelo.Archivo) bool {
+	if a.archivoCoincideListadoActual(archivo) {
+		return false
+	}
+
+	indice := -1
+	for candidato, elemento := range a.elementos {
+		if elemento.Ruta == archivo.Ruta {
+			indice = candidato
+			break
+		}
+	}
+	if indice < 0 {
+		return false
+	}
+
+	a.prepararAnclaScrollListado(a.listaCentro.Position)
+	copy(a.elementos[indice:], a.elementos[indice+1:])
+	a.elementos[len(a.elementos)-1] = modelo.Archivo{}
+	a.elementos = a.elementos[:len(a.elementos)-1]
+
+	if a.restaurarAnclaScrollListado() {
+		return true
+	}
+
+	a.rutaAnclaScrollListado = ""
+	visuales := a.unidadesVisualesListado()
+	if len(visuales) == 0 {
+		a.listaCentro.Position = layout.Position{}
+	} else if a.listaCentro.Position.First >= len(visuales) {
+		a.listaCentro.Position.First = len(visuales) - 1
+		a.listaCentro.Position.Offset = 0
+		a.listaCentro.Position.OffsetLast = 0
+		a.listaCentro.Position.BeforeEnd = true
+	}
+	if len(a.elementos) == 0 && a.hayMasElementos {
+		a.cargarMasElementos()
+	}
+	return true
+}
+
 func (a *Aplicacion) asegurarMapaPreviews() {
 	if a.previews == nil {
 		a.previews = make(map[string]*estadoPreview)
